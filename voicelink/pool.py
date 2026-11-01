@@ -63,7 +63,7 @@ URL_REGEX = re.compile(
 NODE_VERSION = "v4"
 
 class Node:
-    """The base class for a node. 
+    """The base class for a node.
        This node object represents a Lavalink node.
     """
 
@@ -114,7 +114,7 @@ class Node:
 
         self._players: Dict[int, Player] = {}
         self._info: Optional[NodeInfo] = None
-        
+
         self.yt_ratelimit: Optional[YTRatelimit] = STRATEGY.get(yt_ratelimit.get("strategy"))(self, yt_ratelimit) if yt_ratelimit and yt_ratelimit.get("tokens") else None
 
         self._bot.add_listener(self._update_handler, "on_socket_response")
@@ -124,11 +124,11 @@ class Node:
             f"<Voicelink.node ws_uri={self._websocket_uri} rest_uri={self._rest_uri} "
             f"player_count={len(self._players)}>"
         )
-    
+
     def get_player(self, guild_id: int) -> Optional[Player]:
         """Takes a guild ID as a parameter. Returns a voicelink Player object."""
         return self._players.get(guild_id, None)
-    
+
     @property
     def is_connected(self) -> bool:
         """"Property which returns whether this node is connected or not"""
@@ -189,7 +189,7 @@ class Node:
                 await player.on_voice_state_update(data["d"])
             except KeyError:
                 return
-            
+
     async def _listen(self) -> None:
         backoff = ExponentialBackoff(base=7)
 
@@ -205,14 +205,14 @@ class Node:
                 elif msg.type == aiohttp.WSMsgType.ERROR:
                     self._logger.error(f"WebSocket error for node [{self._identifier}]")
                     break
-                
+
                 self._bot.loop.create_task(self._handle_payload(msg.json()))
 
             except aiohttp.ClientConnectionError as e:
                 self._logger.error(f"Connection error: {e}")
                 self._available = False
                 break
-            
+
             except Exception as e:
                 self._logger.exception(f"Unexpected error: {e}")
                 self._available = False
@@ -251,7 +251,7 @@ class Node:
     async def send(self, method: RequestMethod, query: str, data: Union[dict, str] = {}) -> dict:
         if not self._available:
             raise NodeNotAvailable(f"The node '{self._identifier}' is unavailable.")
-        
+
         uri: str = f"{self._rest_uri}/{NODE_VERSION}/{query}"
         async with self._session.request(
             method=method.value,
@@ -261,7 +261,7 @@ class Node:
         ) as resp:
             if resp.status >= 300:
                 raise NodeException(f"Getting errors from Lavalink REST api")
-            
+
             if method == RequestMethod.DELETE:
                 return await resp.json(content_type=None)
 
@@ -274,7 +274,7 @@ class Node:
             if self._available:
                 self._logger.info(f"Node [{self._identifier}] already connected.")
                 return
-            
+
             self._websocket = await self._session.ws_connect(
                 self._websocket_uri, headers=self._headers, heartbeat=self._heartbeat
             )
@@ -282,9 +282,9 @@ class Node:
             self._task = self._bot.loop.create_task(self._listen())
             self._available = True
             self._info = NodeInfo(await self.send(RequestMethod.GET, query="info"))
-            
+
             self._logger.info(f"Node [{self._identifier}] is connected!")
-        
+
         except aiohttp.ClientConnectorError:
             raise NodeConnectionFailure(
                 f"The connection to node '{self._identifier}' failed."
@@ -297,25 +297,25 @@ class Node:
             raise NodeConnectionFailure(
                 f"The URI for node '{self._identifier}' is invalid."
             )
-        
+
         if self.players:
             await self.reconnect()
 
         return self
-              
+
     async def disconnect(self, remove_from_pool: bool = False) -> None:
         """Disconnects a connected Lavalink node and removes it from the node pool.
            This also destroys any players connected to the node.
         """
         for player in self.players.copy().values():
             await player.teardown()
-        
+
         await self._websocket.close()
         if remove_from_pool:
             del self._pool._nodes[self._identifier]
         self._available = False
         self._task.cancel()
-        
+
         self._logger.info(f"Node [{self._identifier}] is disconnected!")
 
     async def reconnect(self) -> None:
@@ -365,7 +365,7 @@ class Node:
         """
         if not search_type:
             search_type = Config().search_platform
-            
+
         if not URL_REGEX.match(query) and ':' not in query:
             query = f"{search_type}:{query}"
 
@@ -375,7 +375,7 @@ class Node:
 
         if not load_type:
             raise TrackLoadError("There was an error while trying to load this track.")
-        
+
         elif load_type == "empty":
             return None
 
@@ -390,11 +390,11 @@ class Node:
 
         elif load_type == "track":
             return [Track(track_id=data["encoded"], info=data["info"], requester=requester)]
-    
+
     async def update_refresh_yt_access_token(self, token: YTToken) -> dict:
         if not self._available:
             raise NodeNotAvailable(f"The node '{self._identifier}' is unavailable.")
-        
+
         uri: str = f"{self._rest_uri}/youtube"
         async with self._session.request(
             method="POST",
@@ -423,7 +423,7 @@ class NodePool:
     @property
     def node_count(self) -> Optional[Node]:
         return len(self._nodes.values())
-    
+
     @classmethod
     def get_best_node(cls, *, algorithm: NodeAlgorithm) -> Node:
         """Fetches the best node based on an NodeAlgorithm.
@@ -491,10 +491,10 @@ class NodePool:
         """
         if identifier in cls._nodes.keys():
             raise NodeCreationError(f"A node with identifier '{identifier}' already exists.")
-        
+
         if not logger:
             logger = logging.getLogger("vocard")
-            
+
         node = Node(
             pool=cls, bot=bot, host=host, port=port, password=password,
             identifier=identifier, secure=secure, heartbeat=heartbeat, yt_ratelimit=yt_ratelimit,

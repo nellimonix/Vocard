@@ -76,7 +76,8 @@ class PlaylistView(PaginationView):
         self.perms: dict[str, list[int]] = playlist_data.get("perms")
 
         super().__init__(Pagination[dict[str, Any]](playlist_data.get("tracks"), page_size=7), primary_view.ctx.author)
-    
+        self.export.disabled = primary_view.ctx.bot.get_command("playlist export") is None
+
     def build_embed(self) -> discord.Embed:
         """Build the embed for the current page of tracks."""
         tracks = self.pagination.get_current_page_items()
@@ -140,13 +141,13 @@ class PlaylistView(PaginationView):
             },
         }
         return super().update_view(extra_states)
-    
+
     async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item) -> None:
         if isinstance(error, VoicelinkException):
             return await dispatch_message(interaction, content=getattr(error, 'original', error), ephemeral=True)
-        
+
         return await super().on_error(interaction, error, item)
-        
+
     async def update_message(self, interaction: discord.Interaction) -> None:
         """Update the view and edit the message with the new embed."""
         self.update_view()
@@ -155,19 +156,19 @@ class PlaylistView(PaginationView):
             await interaction.followup.edit_message(self.primary_view.response.id, embed=self.build_embed(), view=self)
         else:
             await interaction.response.edit_message(embed=self.build_embed(), view=self)
-            
+
     @discord.ui.button(label="<")
     async def back_to_home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         """Return to the main playlist view."""
         view: PlaylistViewManager = self.primary_view.change_view("home")
         await interaction.response.edit_message(embed=view.build_embed(), view=view)
-    
+
     @discord.ui.button(label="Play", custom_id="play", style=discord.ButtonStyle.green)
     async def play_all(self, interaction: discord.Interaction[commands.Bot], button: discord.ui.Button) -> None:
         await interaction.response.defer()
         cmd = interaction.client.get_command("playlist play")
         await cmd(self.primary_view.ctx, self.name)
-    
+
     @discord.ui.button(label="Share", custom_id="share", style=discord.ButtonStyle.gray)
     async def share(self, interaction: discord.Interaction[commands.Bot], button: discord.ui.Button) -> None:
         modal = BaseModal(
@@ -187,25 +188,26 @@ class PlaylistView(PaginationView):
         )
         await interaction.response.send_modal(modal)
         await modal.wait()
-        
+
         user = modal.values.get("user_select")
         if not user:
             return
-        
+
         await interaction.client.get_command("playlist share")(self.primary_view.ctx, user[0], self.name)
 
     @discord.ui.button(label="Export", custom_id="export", style=discord.ButtonStyle.gray)
     async def export(self, interaction: discord.Interaction[commands.Bot], button: discord.ui.Button) -> None:
         await interaction.response.defer()
         cmd = interaction.client.get_command("playlist export")
-        await cmd(self.primary_view.ctx, self.name)
+        if cmd is not None:
+            await cmd(self.primary_view.ctx, self.name)
 
     @discord.ui.button(label="Delete", custom_id="delete", style=discord.ButtonStyle.red)
     async def delete(self, interaction: discord.Interaction[commands.Bot], button: discord.ui.Button) -> None:
         await interaction.response.defer()
         cmd = interaction.client.get_command("playlist delete")
         await cmd(self.primary_view.ctx, name=self.name)
-        
+
         if self.playlist_id != "200":
             view: PlaylistViewManager = self.primary_view.change_view("home")
             view.results = [item for item in view.results if item.get("id") != self.playlist_id]
@@ -219,10 +221,10 @@ class PlaylistViewManager(DynamicViewManager):
         self.ctx: commands.Context[commands.Bot] = ctx
         self.results: list[dict[str, Any]] = results
         self.lang: str = MongoDBHandler.get_cached_settings(ctx.guild.id).get("lang")
-        
+
         views = {"home": self}
         views.update({result["id"]: PlaylistView(self, result) for result in results})
-        
+
         super().__init__(views=views, timeout=None)
 
         self.response: discord.Message = None
@@ -248,23 +250,23 @@ class PlaylistViewManager(DynamicViewManager):
             else:
                 width += 1
         return width
-    
+
     def pad_string(self, s, width):
         s = str(s)
         current_width = self.get_width(s)
         padding = width - current_width
         return s + " " * padding
-    
+
     def build_embed(self) -> discord.Embed:
         """
         Build the embed for the playlist overview.
-        
+
         Returns:
             discord.Embed: The constructed embed with playlist details.
         """
         max_p, _, _ = Config().get_playlist_config()
         text = LangHandler._get_lang(self.lang, "playlist.view.title", "playlist.view.headers", "playlist.view.footer")
-        
+
         headers = text[1].split(",")
         headers.insert(0, "")
         content = [headers]
@@ -286,7 +288,7 @@ class PlaylistViewManager(DynamicViewManager):
         for row in content:
             formatted_row = "   ".join(self.pad_string(item, width) for item, width in zip(row, column_widths))
             description += formatted_row + "\n"
-            
+
         embed = discord.Embed(
             description=f'```{description}```',
             color=Config().embed_color

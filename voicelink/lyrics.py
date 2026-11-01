@@ -103,15 +103,15 @@ class A_ZLyrics(LyricsPlatform):
 
         page = await self.get(link)
         metadata = [elm.text for elm in self.htmlFindAll(page)('b')]
-        
+
         if not metadata:
             return None
-        
+
         try:
             title = ''.join(i for i in metadata[1][1:-1] if i not in r'<>:"/\|?*')
 
             divs = [i.text for i in self.htmlFindAll(page)('div', {'class': None})]
-            
+
             lyrics = max(divs, key=len).strip()
 
             if not lyrics:
@@ -139,16 +139,16 @@ class A_ZLyrics(LyricsPlatform):
             results = re.findall(r'(azlyrics\.com\/lyrics\/[a-z0-9]+\/(\w+).html)', google_page)
         except:
             return None
-            
+
         if len(results):
             jaro_artist = 1.0
             jaro_title = 1.0
-            
+
             if artist:
                 jaro_artist = self.jaro_distance(artist.replace(' ', ''), results[0][0])
             if title:
                 jaro_title = self.jaro_distance(title.replace(' ', ''), results[0][1])
-            
+
             if jaro_artist >= acc and jaro_title >= acc:
                 return 'https://www.' + results[0][0]
             else:
@@ -156,34 +156,34 @@ class A_ZLyrics(LyricsPlatform):
         return None
 
     def jaro_distance(self, s1, s2) -> int:
-        if (s1 == s2): 
+        if (s1 == s2):
             return 1.0
-    
+
         len1, len2 = len(s1), len(s2)
         max_dist = floor(max(len1, len2) / 2) - 1
         match = 0
         hash_s1, hash_s2 = [0] * len(s1), [0] * len(s2)
-    
+
         for i in range(len1):
-            for j in range(max(0, i - max_dist),  
+            for j in range(max(0, i - max_dist),
                         min(len2, i + max_dist + 1)):
                 if (s1[i] == s2[j] and hash_s2[j] == 0):
                     hash_s1[i], hash_s2[j] = 1, 1
                     match += 1
                     break
 
-        if (match == 0): 
+        if (match == 0):
             return 0.0
 
         t = 0
         point = 0
-    
-        for i in range(len1): 
-            if (hash_s1[i]): 
-                while (hash_s2[point] == 0): 
+
+        for i in range(len1):
+            if (hash_s1[i]):
+                while (hash_s2[point] == 0):
                     point += 1
-    
-                if (s1[i] != s2[point]): 
+
+                if (s1[i] != s2[point]):
                     point += 1
                     t += 1
         t = t//2
@@ -197,7 +197,7 @@ class A_ZLyrics(LyricsPlatform):
     def clearText(self, text: str) -> str:
         if text.startswith("\n\n"):
             text = text.replace("\n\n", "", 1)
-            
+
         return text
 
 class Genius(LyricsPlatform):
@@ -209,7 +209,7 @@ class Genius(LyricsPlatform):
         song = self.genius.search_song(title=title, artist=artist)
         if not song:
             return None
-        
+
         return {"default": song.lyrics}
 
 class Lyrist(LyricsPlatform):
@@ -223,7 +223,7 @@ class Lyrist(LyricsPlatform):
                 resp = await session.get(url=request_url, headers={'User-Agent': random.choice(userAgents)})
                 if resp.status != 200:
                     return None
-                
+
                 data = await resp.json()
                 return {"default": data["lyrics"]}
         except:
@@ -236,13 +236,13 @@ class Lrclib(LyricsPlatform):
     async def get(self, url, params: dict = None) -> list[dict]:
         try:
             async with aiohttp.ClientSession() as session:
-                resp = await session.get(url=url, headers={'User-Agent': random.choice(userAgents)}, params=params)
-                if resp.status != 200:
-                    return None
-                return await resp.json()
-        except:
+                async with session.get(url=url, headers={'User-Agent': random.choice(userAgents)}, params=params, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                    if response.status != 200:
+                        return []
+                    return await response.json()
+        except (aiohttp.ClientError, TimeoutError, ValueError):
             return []
-        
+
     async def get_lyrics(self, title: str, artist: str) -> Optional[dict[str, str]]:
         params = {"q": title}
         result = await self.get(self.base_url + "search", params)
@@ -250,25 +250,25 @@ class Lrclib(LyricsPlatform):
             return {"default": result[0].get("plainLyrics", "")}
 
 """
-Strvm/musicxmatch-api: a reverse engineered API wrapper for MusicXMatch  
+Strvm/musicxmatch-api: a reverse engineered API wrapper for MusicXMatch
 Copyright (c) 2025 Strvm
 
-Permission is hereby granted, free of charge, to any person obtaining a copy  
-of this software and associated documentation files (the "Software"), to deal  
-in the Software without restriction, including without limitation the rights  
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell  
-copies of the Software, and to permit persons to whom the Software is  
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
 furnished to do so, subject to the following conditions:
 
-The above copyright notice and this permission notice shall be included in all  
+The above copyright notice and this permission notice shall be included in all
 copies or substantial portions of the Software.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR  
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,  
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE  
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER  
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,  
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE  
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 class MusixMatch(LyricsPlatform):
@@ -299,7 +299,7 @@ class MusixMatch(LyricsPlatform):
 
                 if not matches:
                     raise Exception("_app URL not found in the HTML content.")
-                
+
                 return matches[-1]
 
     async def get_secret(self) -> str:
@@ -335,7 +335,7 @@ class MusixMatch(LyricsPlatform):
             + "&signature_protocol=sha256"
         )
         return signature
-    
+
     async def make_request(self, url: str) -> dict:
         url = url.replace("%20", "+").replace(" ", "+")
         url = self.base_url + url

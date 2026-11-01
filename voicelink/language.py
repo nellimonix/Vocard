@@ -40,7 +40,7 @@ class LangHandler:
 
     _langs: dict[str, dict[str, str]] = {}
     _local_langs: dict[str, dict[str, str]] = {}
-    _default_lang: str = "EN"
+    _default_lang: str = "RU"
 
     @classmethod
     def init(
@@ -81,30 +81,30 @@ class LangHandler:
                         logger.error(f"Failed to load {label} file '{filepath}': {e}")
 
         return cls
-    
+
     @classmethod
     def _flatten_json(cls, nested_json: Dict[str, Any], parent_key: str = '', separator: str = '.') -> Dict[str, str]:
         """
         Flatten a nested JSON object into a single-level dictionary with dot-separated keys.
-        
+
         Args:
             nested_json (dict): The nested JSON object to flatten
             parent_key (str): The base key for recursion (used internally)
             separator (str): The separator to use between keys (default: '.')
-        
+
         Returns:
             dict: Flattened dictionary with dot-separated keys
         """
         flattened = {}
-        
+
         for key, value in nested_json.items():
             new_key = f"{parent_key}{separator}{key}" if parent_key else key
-            
+
             if isinstance(value, dict):
                 flattened.update(cls._flatten_json(value, new_key, separator))
             else:
                 flattened[new_key] = value
-        
+
         return flattened
 
     @classmethod
@@ -121,17 +121,17 @@ class LangHandler:
         """
         if not lang:
             lang = cls._default_lang
-            
+
         lang = lang.upper()
         if lang not in cls._langs:
             lang = cls._default_lang
 
         lang_dict = cls._langs.get(lang, {})
         if len(keys) == 1:
-            value = lang_dict.get(keys[0], "Not found!")
+            value = lang_dict.get(keys[0], cls._langs.get("EN", {}).get(keys[0], "Not found!"))
             return value
 
-        values = [lang_dict.get(key, "Not found!") for key in keys]
+        values = [lang_dict.get(key, cls._langs.get("EN", {}).get(key, "Not found!")) for key in keys]
         return values
 
     @classmethod

@@ -35,7 +35,7 @@ class DynamicViewManager(discord.ui.View):
     def add_view(self, name: str, view: discord.ui.View) -> None:
         """
         Add a view to the manager.
-        
+
         Args:
             name (str): The name of the view.
             view (discord.ui.View): The view instance to add.
@@ -48,10 +48,10 @@ class DynamicViewManager(discord.ui.View):
     def get_view(self, key: str) -> discord.ui.View | None:
         """
         Get a view from the manager.
-        
+
         Args:
             key (str): The name of the view to retrieve.
-        
+
         Returns:
             discord.ui.View | None: The requested view or None if not found.
         """
@@ -60,7 +60,7 @@ class DynamicViewManager(discord.ui.View):
     def remove_view(self, key: str) -> None:
         """
         Remove a view from the manager.
-        
+
         Args:
             key (str): The name of the view to remove.
         """
@@ -70,17 +70,17 @@ class DynamicViewManager(discord.ui.View):
     def change_view(self, name: str) -> discord.ui.View:
         """
         Change the current active view.
-        
+
         Args:
             name (str): The name of the view to switch to.
-            
+
         Returns:
             discord.ui.View: The newly activated view.
         """
         view = self.get_view(name)
         if not view:
             raise ValueError(f"No view found with the name '{name}'.")
-        
+
         self._current_view = view
         return view
 

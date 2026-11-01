@@ -95,7 +95,7 @@ class QueueView(PaginationView):
             await self.response.edit(view=self)
         except discord.HTTPException:
             pass
-        
+
     async def build_embed(self) -> discord.Embed:
         """Build the embed for the current page of tracks."""
         tracks = self.pagination.get_current_page_items()
@@ -112,10 +112,10 @@ class QueueView(PaginationView):
 
         embed = discord.Embed(title=texts[0], color=Config().embed_color)
         embed.description = self.format_description(tracks, texts)
-        
+
         if self.player.current:
             embed.set_thumbnail(url=self.player.current.thumbnail)
-            
+
         embed.set_footer(text=texts[6].format(self.total_duration))
 
         return embed

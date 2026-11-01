@@ -65,12 +65,15 @@ if TYPE_CHECKING:
 async def connect_channel(ctx: Union[commands.Context, Interaction], channel: VoiceChannel = None):
     texts = await LangHandler.get_lang(ctx.guild.id, "voice.connection.noChannel", "voice.connection.noPermission")
     try:
-        channel = channel or ctx.author.voice.channel if isinstance(ctx, commands.Context) else ctx.user.voice.channel
+        channel = channel or (ctx.author.voice.channel if isinstance(ctx, commands.Context) else ctx.user.voice.channel)
     except:
         raise VoicelinkException(texts[0])
 
     check = channel.permissions_for(ctx.guild.me)
     if check.connect == False or check.speak == False:
+        raise VoicelinkException(texts[1])
+    limit = getattr(channel, "user_limit", 0)
+    if limit and len(channel.members) >= limit and not (check.administrator or check.move_members):
         raise VoicelinkException(texts[1])
 
     settings = await MongoDBHandler.get_settings(channel.guild.id)
@@ -103,9 +106,9 @@ class Player(VoiceProtocol):
         return self
 
     def __init__(
-        self, 
-        client: Optional[Client] = None, 
-        channel: Optional[VoiceChannel] = None, 
+        self,
+        client: Optional[Client] = None,
+        channel: Optional[VoiceChannel] = None,
         ctx: Union[commands.Context, Interaction] = None,
         settings: dict[str, Any] = None
     ):
@@ -113,7 +116,7 @@ class Player(VoiceProtocol):
         self._bot: Client = client
         self._ipc_client: IPCClient = self._bot.ipc_client
         self._ipc_connection: bool = False
-        
+
         self.context = ctx
         self.dj: Member = ctx.user if isinstance(ctx, Interaction) else ctx.author
         self.channel: VoiceChannel = channel
@@ -143,6 +146,8 @@ class Player(VoiceProtocol):
         self._voice_state: dict = {}
 
         self.controller: Union[Message, PartialMessage] = None
+        self._controller_view: Optional[InteractiveController] = None
+        self._closing = False
         self._updating: bool = False
 
         self.pause_votes = set()
@@ -235,12 +240,12 @@ class Player(VoiceProtocol):
     def ping(self) -> float:
         """Calculates and returns the player's current ping in seconds."""
         return round(self._ping / 1000, 2)
-    
+
     @property
     def autoplay(self) -> bool:
         """Indicates whether the player is set to autoplay."""
         return self.settings.get("autoplay", False)
-    
+
     @property
     def data(self) -> dict:
         """Returns a dictionary containing the player's data."""
@@ -258,12 +263,12 @@ class Player(VoiceProtocol):
             "position": self.position,
             "autoplay": self.autoplay
         }
-    
+
     @property
     def is_ipc_connected(self) -> bool:
         """Indicates whether the Inter-Process Communication (IPC) connection is active."""
         return self._ipc_client._is_connected and self._ipc_connection
-        
+
     def get_msg(self, *keys) -> Union[list[str], str]:
         """Retrieves a localized message or list of messages based on the given keys
            for the guild associated with this player.
@@ -282,47 +287,47 @@ class Player(VoiceProtocol):
         required = ceil((len(self.channel.members) - 1) / 2.5)
         if leave:
             required += 1
-        
+
         return required
-    
+
     def is_user_join(self, user: Member):
         """Checks if a user is present in the voice channel or has 'Manage Server' permission."""
         if user not in self.channel.members:
             if not user.guild_permissions.manage_guild:
-                return False        
+                return False
         return True
-    
+
     def is_privileged(self, user: Member, check_user_join: bool = True) -> bool:
         """
         Determines if a user has privileged access.
 
-        Privileged access is granted if the user is in the bot access list, 
+        Privileged access is granted if the user is in the bot access list,
         has 'Manage Server' permission, or meets the DJ role criteria in the settings.
         Raises an exception if `check_user_join` is True and the user is not in the channel.
         """
         if user.id in Config().bot_access_user:
             return True
-        
+
         manage_perm = user.guild_permissions.manage_guild
         if check_user_join and not self.is_user_join(user):
             raise VoicelinkException(self.get_msg('voice.connection.notInChannel').format(user.mention, self.channel.mention))
-            
+
         if 'dj' in self.settings and self.settings['dj']:
             return manage_perm or (self.settings['dj'] in [role.id for role in user.roles])
         return self.dj.id == user.id or manage_perm
-    
+
     def build_embed(self, current_track: Track = None):
         """Builds an embed based on the current track state."""
         controller = self.settings.get("default_controller", Config().controller).get("embeds", {})
         embed_form = controller.get("active" if current_track else "inactive", {})
-        
+
         return PlayerPlaceholder.build_embed(embed_form, self._ph)
 
     async def send(self, method: RequestMethod, query: str = None, data: Union[Dict, str] = {}) -> Dict:
         """Sends an HTTP request to the node with the given method, query, and data."""
         uri: str = f"sessions/{self._node._session_id}/players/{self._guild.id}" + (f"?{query}" if query else "")
         return await self._node.send(method, query=uri, data=data)
-        
+
     async def _update_state(self, data: dict) -> None:
         """Updates the player's state based on the provided data."""
         state: dict = data.get("state")
@@ -342,21 +347,20 @@ class Player(VoiceProtocol):
 
     async def _dispatch_voice_update(self, voice_data: Dict[str, Any] = None):
         """Dispatches a voice update to the node."""
-        if {"sessionId", "event"} != self._voice_state.keys():
-            self._logger.debug(f"Player in {self.guild.name}({self.guild.id}) dispatched voice update failed {voice_data}")
+        state = voice_data or self._voice_state
+        event = state.get("event") or {}
+        if not self.channel or not state.get("sessionId") or not event.get("token") or not event.get("endpoint"):
             return
 
-        state = voice_data or self._voice_state
-
         data = {
-            "token": state['event']['token'],
-            "endpoint": state['event']['endpoint'],
+            "token": event['token'],
+            "endpoint": event['endpoint'],
             "sessionId": state['sessionId'],
             "channelId": str(self.channel.id),
         }
-        
+
         await self.send(method=RequestMethod.PATCH, data={"voice": data})
-        self._logger.debug(f"Player in {self.guild.name}({self.guild.id}) dispatched voice update to {state['event']['endpoint']} with data {data}")
+        self._logger.debug("Dispatched voice update to %s", event['endpoint'])
 
     async def on_voice_server_update(self, data: dict):
         """Handles a voice server update event."""
@@ -374,10 +378,8 @@ class Player(VoiceProtocol):
 
         self.channel = self.guild.get_channel(int(channel_id))
 
-        if not data.get("token"):
-            return
-
-        await self._dispatch_voice_update({**self._voice_state, "event": data})
+        state = {**self._voice_state, "event": data} if data.get("token") else self._voice_state
+        await self._dispatch_voice_update(state)
 
     async def _dispatch_event(self, data: dict):
         """Dispatches an event based on the type of event data received."""
@@ -386,7 +388,7 @@ class Player(VoiceProtocol):
 
         if isinstance(event, TrackEndEvent) and event.reason != "replaced":
             self._current = None
-        
+
         if isinstance(event, TrackExceptionEvent) and event.exception["message"] == "This content isn’t available.":
             if self._node.yt_ratelimit:
                 await self._node.yt_ratelimit.flag_active_token()
@@ -402,7 +404,7 @@ class Player(VoiceProtocol):
         """Processes the next track in the queue."""
         if self._current or self.is_playing or not self.channel:
             return
-        
+
         if self._paused:
             self._paused = False
 
@@ -412,7 +414,7 @@ class Player(VoiceProtocol):
 
         if not self.guild.me.voice:
             await self.connect(timeout=0.0, reconnect=True)
-        
+
         self.pause_votes.clear()
         self.resume_votes.clear()
         self.skip_votes.clear()
@@ -445,21 +447,29 @@ class Player(VoiceProtocol):
 
         if self.is_ipc_connected:
             await self.send_ws({
-                "op": "trackUpdate", 
+                "op": "trackUpdate",
                 "currentQueuePosition": self.queue._position if track else self.queue._position + 1,
                 "trackId": track.track_id if track else None,
                 "isPaused": self._paused
             })
 
+    def _stop_controller_view(self):
+        view = getattr(self, "_controller_view", None)
+        self._controller_view = None
+        if view is not None:
+            view.stop()
+
     async def invoke_controller(self):
         """Sends or updates the music controller message in the designated channel."""
-        if not self.settings.get('controller', True) or self._updating or not self.channel:
+        if getattr(self, "_closing", False) or not self.settings.get('controller', True) or self._updating or not self.channel:
             return
-        
-        self._updating = True
 
-        try:            
+        self._updating = True
+        view = None
+
+        try:
             embed, view = self.build_embed(self.current), InteractiveController(self)
+            self._stop_controller_view()
             if not self.controller:
                 if request_channel_data := self.settings.get("music_request_channel"):
                     if channel := self.bot.get_channel(request_channel_data.get("text_channel_id")):
@@ -468,7 +478,7 @@ class Player(VoiceProtocol):
                             await self.controller.edit(embed=embed, view=view)
                         except errors.NotFound:
                             self.controller = None
-                
+
                 # Send a new controller message if none exists
                 if not self.controller:
                     self.controller = await dispatch_message(self.context, content=embed, view=view, delete_after=None, requires_fetch=True)
@@ -478,19 +488,27 @@ class Player(VoiceProtocol):
                     await self.controller.delete()
                 except errors.NotFound:
                     self.controller = None
-                    
+
                 self.controller = await dispatch_message(self.context, content=embed, view=view, delete_after=None, requires_fetch=True)
 
             else:
-                await self.controller.edit(embed=embed, view=view)
-        
+                try:
+                    await self.controller.edit(embed=embed, view=view)
+                except errors.NotFound:
+                    self.controller = await dispatch_message(self.context, content=embed, view=view, delete_after=None, requires_fetch=True)
+
+            if not self._closing:
+                self._controller_view = view
+
         except errors.Forbidden:
             self._logger.warning(f"Missing permission to update the music controller on {self.guild.name}({self.guild.id})")
 
         except Exception as e:
             self._logger.error(f"Something went wrong while sending music controller to {self.guild.name}({self.guild.id})", exc_info=e)
-        
+
         finally:
+            if view is not None and self._controller_view is not view:
+                view.stop()
             self._updating = False
 
     async def is_position_fresh(self):
@@ -503,15 +521,17 @@ class Player(VoiceProtocol):
             pass
 
         return False
-    
+
     async def teardown(self):
         """Cleans up the player and associated resources."""
+        self._closing = True
+        self._stop_controller_view()
         try:
             await MongoDBHandler.update_settings(self.guild.id, {"$set": {
-                "last_active": (timeNow := round(time.time())), 
+                "last_active": (timeNow := round(time.time())),
                 "played_time": round(self.settings.get("played_time", 0) + ((timeNow - self.joinTime) / 60), 2)
             }})
-            
+
             if self.is_ipc_connected:
                 await self.send_ws({"op": "playerClose"})
         except:
@@ -523,7 +543,7 @@ class Player(VoiceProtocol):
             if self.controller:
                 if self.controller.id == self.settings.get("music_request_channel", {}).get("controller_msg_id"):
                     await self.controller.edit(embed=self.build_embed(), view=None)
-                else: 
+                else:
                     await self.controller.delete()
         except:
             pass
@@ -547,7 +567,7 @@ class Player(VoiceProtocol):
         """
         if not search_type:
             search_type = Config().search_platform
-            
+
         return await self._node.get_tracks(query, requester=requester, search_type=search_type)
 
     async def connect(self, *, timeout: float, reconnect: bool, self_deaf: bool = True, self_mute: bool = False):
@@ -558,7 +578,7 @@ class Player(VoiceProtocol):
 
         if self.channel:
             self._logger.debug(f"Player in {self.guild.name}({self.guild.id}) has been connected to {self.channel.name}({self.channel.id}).")
-            
+
     async def stop(self):
         """Stops the currently playing track."""
         self._current = None
@@ -566,28 +586,33 @@ class Player(VoiceProtocol):
 
     async def disconnect(self, *, force: bool = False):
         """Disconnects the player from voice."""
+        self._closing = True
+        self._stop_controller_view()
         try:
             await self.guild.change_voice_state(channel=None)
         finally:
             self.cleanup()
             self._is_connected = False
             self.channel = None
-        
+
         self._logger.debug(f"Player in {self.guild.name}({self.guild.id}) has been disconnected from a voice channel.")
 
     async def destroy(self):
         """Disconnects and destroys the player, and runs internal cleanup."""
-        
+        self._closing = True
+        self._stop_controller_view()
+        self._cancel_inactive_cleanup_timer()
+
         try:
             await self.disconnect()
         except:
             # 'NoneType' has no attribute '_get_voice_client_key' raised by self.cleanup() ->
             # assume we're already disconnected and cleaned up
             assert self.channel is None and not self.is_connected
-        
-        self._node._players.pop(self.guild.id)
+
+        self._node._players.pop(self.guild.id, None)
         await self.send(method=RequestMethod.DELETE)
-    
+
     async def play(
         self,
         track: Track,
@@ -607,7 +632,7 @@ class Player(VoiceProtocol):
 
         if end or track.end_time:
             data["endTime"] = str(end or track.end_time)
-        
+
         await self.send(method=RequestMethod.PATCH, query=f"noReplace={ignore_if_playing}", data=data)
         if self._node.yt_ratelimit:
             await self._node.yt_ratelimit.handle_request()
@@ -649,7 +674,7 @@ class Player(VoiceProtocol):
         self._inactive_cleanup_task = self.bot.loop.create_task(
             self._inactive_cleanup_timer_worker(seconds)
         )
-        
+
     async def add_track(self, raw_tracks: Union[Track, List[Track]], *, start_time: int = 0, end_time: int = 0, at_front: bool = False, duplicate: bool = True) -> int:
         """Adds one or more tracks to the queue."""
         tracks: List[Track] = []
@@ -663,17 +688,17 @@ class Player(VoiceProtocol):
                         continue
 
                     self._validate_time(track, start_time, end_time)
-                    self.queue.put_at_front(track) if at_front else self.queue.put(track)  
+                    self.queue.put_at_front(track) if at_front else self.queue.put(track)
                     tracks.append(track)
                     _duplicate_tracks.append(track.uri)
             else:
                 if raw_tracks.uri in _duplicate_tracks:
                     raise DuplicateTrack(self.get_msg("queue.errors.duplicateTrack"))
-                
+
                 self._validate_time(raw_tracks, start_time, end_time)
                 position = self.queue.put_at_front(raw_tracks) if at_front else self.queue.put(raw_tracks)
                 tracks.append(raw_tracks)
-                
+
         finally:
             if tracks:
                 if self.channel.members and len([m for m in self.channel.members if not m.bot]) > 0:
@@ -683,7 +708,7 @@ class Player(VoiceProtocol):
 
                 self._logger.debug(f"Player in {self.guild.name}({self.guild.id}) has been added {len(tracks)} tracks into the queue.")
                 return len(tracks) if is_list else position
-    
+
     async def remove_track(self, index: int, index2: int = None, remove_target: Member = None, requester: Member = None) -> Dict[int, Track]:
         """Removes one or more tracks from the queue."""
         removed_tracks = self.queue.remove(index, index2, remove_target)
@@ -695,19 +720,19 @@ class Player(VoiceProtocol):
             }, requester=requester)
 
         return removed_tracks
-    
+
     async def seek(self, position: float, requester: Member = None) -> float:
         """Seeks to a position in the currently playing track milliseconds"""
         if not self._current:
             raise VoicelinkException("Nothing is playing right now")
-        
+
         if position < 0 or position > self._current.length:
             raise TrackInvalidPosition("Seek position must be between 0 and the track length")
 
         await self.send(method=RequestMethod.PATCH, data={"position": position})
         if self.is_ipc_connected:
             await self.send_ws({"op": "updatePosition", "position": position}, requester)
-        
+
         self._logger.debug(f"Player in {self.guild.name}({self.guild.id}) has been seeking to {position}.")
         return self._position
 
@@ -720,7 +745,7 @@ class Player(VoiceProtocol):
 
         if self.is_ipc_connected:
             await self.send_ws({"op": "updatePause", "pause": pause}, requester)
-        
+
         self._logger.debug(f"Player in {self.guild.name}({self.guild.id}) has been {'paused' if pause else 'resumed'}.")
         return self._paused
 
@@ -740,7 +765,7 @@ class Player(VoiceProtocol):
         replacement = self.queue.tracks() if queue_type == "queue" else self.queue.history()
         if len(replacement) < 3:
             raise VoicelinkException(self.get_msg('player.controls.shuffle.error'))
-        
+
         shuffle(replacement)
         self.queue.replace(queue_type, replacement)
         self.shuffle_votes.clear()
@@ -750,7 +775,7 @@ class Player(VoiceProtocol):
                 "tracks": [{"trackId": track.track_id, "requesterId": str(track.requester.id)} for track in replacement],
                 "queue_type": queue_type
             }, requester)
-        
+
         self._logger.debug(f"Player in {self.guild.name}({self.guild.id}) has been shuffled the queue.")
 
     async def swap_track(self, index1: int, index2: int, requester: Member = None) -> Tuple[Track, Track]:
@@ -772,35 +797,35 @@ class Player(VoiceProtocol):
             await self.send_ws({"op": "moveTrack", "movedTrack": {"index": index, "trackId": moved_track.track_id}, "newIndex": new_index}, requester)
 
         return moved_track
-    
+
     async def set_repeat(self, mode: LoopType = None, requester: Member = None) -> LoopType:
         """Sets the repeat mode for the queue."""
         if not mode:
             mode = self.queue._repeat.next()
-        
+
         if not isinstance(mode, LoopType):
             raise VoicelinkException("Invalid repeat mode.")
-        
+
         self.queue._repeat.set_mode(mode)
-        
+
         if self.is_ipc_connected:
             await self.send_ws({"op": "repeatTrack", "repeatMode": mode.name.lower()}, requester)
 
         self._logger.debug(f"Player in {self.guild.name}({self.guild.id}) has been update the repeat mode to {mode.name.lower()}.")
         return mode
-    
+
     async def add_filter(self, filter: Filter, requester: Member = None, fast_apply: bool = False) -> Filters:
         """Adds a filter to the player's audio stream."""
         try:
             self._filters.add_filter(filter=filter)
         except FilterTagAlreadyInUse:
             raise FilterTagAlreadyInUse(self.get_msg("effects.tagInUse"))
-        
+
         payload = self._filters.get_all_payloads()
         await self.send(method=RequestMethod.PATCH, data={"filters": payload})
         if fast_apply:
             await self.seek(self.position)
-        
+
         if self.is_ipc_connected:
             await self.send_ws({
                 "op": "updateFilter",
@@ -818,7 +843,7 @@ class Player(VoiceProtocol):
             self.queue.history_clear(self.is_playing)
         elif queue_type == "queue":
             self.queue.clear()
-        
+
         if self.is_ipc_connected:
             await self.send_ws({
                 "op": "clearQueue",
@@ -831,7 +856,7 @@ class Player(VoiceProtocol):
         await self.send(method=RequestMethod.PATCH, data={"filters": payload})
         if fast_apply:
             await self.seek(self.position)
-        
+
         if self.is_ipc_connected:
             await self.send_ws({
                 "op": "updateFilter",
@@ -841,12 +866,12 @@ class Player(VoiceProtocol):
 
         self._logger.debug(f"Player in {self.guild.name}({self.guild.id}) has been removed a {filter_tag} filter.")
         return self._filters
-    
+
     async def reset_filter(self, *, requester: Member = None, fast_apply=False) -> None:
         """Resets all filters applied to the player's audio stream."""
         if not self._filters:
             raise FilterInvalidArgument("You must have filters applied first in order to use this method.")
-        
+
         self._filters.reset_filters()
         await self.send(method=RequestMethod.PATCH, data={"filters": {}})
         if fast_apply:
@@ -879,7 +904,7 @@ class Player(VoiceProtocol):
 
             if self.is_paused:
                 await self.set_pause(True)
-    
+
     async def get_recommendations(self, *, track: Optional[Track] = None) -> bool:
         """Fetches and adds recommended tracks based on the provided track or recent history."""
         if not track:
@@ -891,17 +916,17 @@ class Player(VoiceProtocol):
         tracks = await track.get_recommendations(self._node)
         if tracks:
             await self.add_track(tracks, duplicate=False)
-            
+
             self._logger.debug(f"Player in {self.guild.name}({self.guild.id}) has been requested recommendations.")
             return True
         return False
-    
+
     async def update_voice_status(self, remove_status: bool = False) -> None:
         """Updates the voice status of the channel based on the specified template."""
         template = self.settings.get("stage_announce_template", Config().voice_status_template)
         if not template or not self.channel:
             return
-        
+
         try:
             rv = {key: func() if callable(func) else func for key, func in self._ph.variables.items()}
             status = None if remove_status else self._ph.replace(text=template, variables=rv)
@@ -909,11 +934,14 @@ class Player(VoiceProtocol):
             if self.channel.type == ChannelType.voice:
                 await self.channel.edit(status=status)
 
+        except (errors.Forbidden, errors.NotFound):
+            return
+
         except Exception as e:
             self._logger.error(
                 f"Failed to update voice status in channel '{self.channel.name}' "
                 f"({self.channel.id}) for guild '{self.channel.guild}' "
-                f"({self.channel.guild.id})", 
+                f"({self.channel.guild.id})",
                 exc_info=e
             )
 
@@ -933,9 +961,8 @@ class Player(VoiceProtocol):
                 return
 
             members = self.channel.members if self.channel else []
-            has_non_bot = any(not m.bot or not m.voice.self_deaf for m in members)
-            # Empty channel: always pause/teardown. If people remain: only when idle (not playing + empty queue).
-            if has_non_bot and (self.is_playing or not self.queue.is_empty):
+            has_listeners = any(not m.bot and m.voice and not m.voice.self_deaf for m in members)
+            if has_listeners and (self.is_playing or not self.queue.is_empty):
                 return
 
             self._inactive_cleanup_task = None

@@ -40,7 +40,7 @@ class Task(commands.Cog):
     def cog_unload(self):
         self.activity_update.cancel()
         self.cache_cleaner.cancel()
-    
+
     @tasks.loop(seconds=Config().timer_settings.get("bot_activity_update", 600))
     async def activity_update(self):
         await self.bot.wait_until_ready()
@@ -63,7 +63,7 @@ class Task(commands.Cog):
         except Exception as e:
             func.logger.error("Error occurred while changing the bot status!", exc_info=e)
 
-    @tasks.loop(seconds=Config().timer_settings.get("cache_cleanup", 43200))
+    @tasks.loop(seconds=Config().timer_settings.get("cache_cleanup", 60))
     async def cache_cleaner(self):
         await voicelink.MongoDBHandler.cleanup_cache()
 

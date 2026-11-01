@@ -30,6 +30,7 @@ from typing import Any, Dict, Optional, Literal, TypedDict, List
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorCollection
 
 from .config import Config
+from .cache import BoundedTTLCache
 
 logger: logging.Logger = logging.getLogger("vocard.db")
 
@@ -59,7 +60,7 @@ class MongoDBHandler:
     Handles MongoDB operations with connection pooling and caching.
     Implements a thread-safe singleton pattern for database connections.
     """
-    
+
     # Static instance variables
     _client: Optional[AsyncIOMotorClient] = None
     _db: Optional[Any] = None
@@ -70,7 +71,7 @@ class MongoDBHandler:
     # Cache with TTL (Time To Live in seconds)
     _CACHE_TTL: int = 300  # 5 minutes
     _settings_buffer: Dict[int, Dict[str, Any]] = {}
-    _users_buffer: Dict[int, Dict[str, Any]] = {}
+    _users_buffer = BoundedTTLCache()
     _last_access: Dict[int, float] = {}  # Tracks last access time for cache entries
 
     # Maximum cache size to prevent memory issues
@@ -95,11 +96,11 @@ class MongoDBHandler:
     async def init(cls, uri: str, db_name: str) -> None:
         """
         Initialize the MongoDB connection with connection pooling and error handling.
-        
+
         Args:
             uri (str): MongoDB connection URI
             db_name (str): Name of the database to use
-            
+
         Raises:
             ConnectionError: If unable to connect to MongoDB
             Exception: For other initialization errors
@@ -113,7 +114,7 @@ class MongoDBHandler:
                 logger.warning("MongoDB client is already initialized. Skipping reinitialization.")
                 return
 
-            logger.debug("Initializing MongoDB client with URI: %s and DB name: %s", uri, db_name)
+            logger.debug("Initializing MongoDB database: %s", db_name)
 
             try:
                 cls._client = AsyncIOMotorClient(
@@ -143,7 +144,7 @@ class MongoDBHandler:
                 cls._users_db = None
 
                 raise ConnectionError(f"Failed to initialize MongoDB: {str(e)}")
-                
+
     @classmethod
     async def cleanup_cache(cls) -> None:
         """
@@ -167,9 +168,10 @@ class MongoDBHandler:
                     del cls._last_access[guild_id]
                     logger.debug("Removed expired cache for guild_id: %s", guild_id)
 
-                # If still too large, remove oldest entries
+                cls._users_buffer.expire()
+
                 while len(cls._settings_buffer) > cls._MAX_CACHE_SIZE:
-                    oldest_id = min(cls._last_access.items(), key=lambda x: x[1])[0]
+                    oldest_id = min(cls._settings_buffer, key=lambda key: cls._last_access.get(key, 0))
                     del cls._settings_buffer[oldest_id]
                     del cls._last_access[oldest_id]
                     logger.warning("Cache size exceeded. Removed oldest entry: %s", oldest_id)
@@ -189,16 +191,16 @@ class MongoDBHandler:
     ) -> bool:
         """
         Update database and cache atomically with error handling and validation.
-        
+
         Args:
             db: MongoDB collection to update
             cache: Cache dictionary to update
             filter_: MongoDB filter for the update
             data: Update operations to perform
-            
+
         Returns:
             bool: True if update was successful, False otherwise
-            
+
         Raises:
             ValueError: If invalid update operation is provided
         """
@@ -214,7 +216,7 @@ class MongoDBHandler:
                     for key, value in action.items():
                         cursors = key.split(".")
                         nested = cache
-                        
+
                         # Ensure path exists
                         for c in cursors[:-1]:
                             if not isinstance(nested, dict):
@@ -253,31 +255,37 @@ class MongoDBHandler:
 
                 # Then update database
                 result = await db.update_one(filter_, data)
-                
-                # Update last access time
+
                 if '_id' in filter_:
-                    cls._last_access[filter_['_id']] = time.time()
-                
-                return result.modified_count > 0
+                    key = filter_['_id']
+                    if db is cls._users_db:
+                        cached = cls._users_buffer.get(key)
+                        cls._invalidate_user_cache(key)
+                        if cached is cache:
+                            cls._users_buffer[key] = cache
+                    else:
+                        cls._last_access[key] = time.time()
+
+                return result.matched_count > 0
 
             except Exception as e:
                 # Rollback cache if database update fails
                 if '_id' in filter_:
                     cls._settings_buffer.pop(filter_['_id'], None)
-                    cls._users_buffer.pop(filter_['_id'], None)
+                    cls._invalidate_user_cache(filter_['_id'])
                 raise Exception(f"Update failed: {str(e)}")
 
     @classmethod
     def get_cached_settings(
-        cls, 
+        cls,
         guild_id: int
     ) -> Dict[str, Any]:
         """
         Retrieve settings for a guild with caching.
-        
+
         Args:
             guild_id: The Discord guild ID
-            
+
         Returns:
             Dict containing guild settings or empty dict if not found
         """
@@ -289,10 +297,10 @@ class MongoDBHandler:
 
         except Exception as e:
             raise ConnectionError(f"Failed to retrieve settings: {str(e)}")
-        
+
     @classmethod
     async def get_settings(
-        cls, 
+        cls,
         guild_id: int,
         *,
         deep_copy: bool = True,
@@ -300,14 +308,14 @@ class MongoDBHandler:
     ) -> Dict[str, Any]:
         """
         Retrieve settings for a guild with caching.
-        
+
         Args:
             guild_id: The Discord guild ID
             force_refresh: If True, bypass cache and fetch fresh data
-            
+
         Returns:
             Dict containing guild settings
-            
+
         Raises:
             ConnectionError: If database operation fails
         """
@@ -319,13 +327,14 @@ class MongoDBHandler:
                     if not settings:
                         settings = {"_id": guild_id}
                         try:
-                            await cls._settings_db.insert_one(settings)
+                            await cls._settings_db.update_one({"_id": guild_id}, {"$setOnInsert": settings}, upsert=True)
+                            settings = await cls._settings_db.find_one({"_id": guild_id})
                         except Exception as e:
                             raise ConnectionError(f"Failed to create settings: {str(e)}")
-                    
+
                     cls._settings_buffer[guild_id] = settings
                     cls._last_access[guild_id] = time.time()
-                
+
                 buffer = cls._settings_buffer[guild_id]
                 return copy.deepcopy(buffer) if deep_copy else buffer
 
@@ -342,15 +351,15 @@ class MongoDBHandler:
     ) -> bool:
         """
         Update settings for a guild.
-        
+
         Args:
             guild_id: The Discord guild ID
             data: Update operations to perform
             upsert: If True, create document if it doesn't exist
-            
+
         Returns:
             bool: True if update was successful
-            
+
         Raises:
             ValueError: If invalid update data is provided
             ConnectionError: If database operation fails
@@ -363,18 +372,24 @@ class MongoDBHandler:
                 {"_id": guild_id},
                 data
             )
-            
+
             if not result and upsert:
                 # Try to insert if update failed and upsert is True
                 settings = {"_id": guild_id, **data.get("$set", {})}
                 await cls._settings_db.insert_one(settings)
                 cls._settings_buffer[guild_id] = settings
                 return True
-                
+
             return result
-            
+
         except Exception as e:
             raise ConnectionError(f"Failed to update settings: {str(e)}")
+
+    @classmethod
+    def _invalidate_user_cache(cls, user_id):
+        cls._users_buffer.pop(user_id, None)
+        for part in cls._user_base:
+            cls._users_buffer.pop((user_id, part), None)
 
     @classmethod
     async def get_user(
@@ -387,44 +402,60 @@ class MongoDBHandler:
     ) -> Dict[str, Any]:
         """
         Retrieve user data with caching and type-specific data.
-        
+
         Args:
             user_id: The Discord user ID
             d_type: Specific data type to retrieve
             need_copy: If True, return a deep copy of the data
             force_refresh: If True, bypass cache and fetch fresh data
-            
+
         Returns:
             Dict containing user data
-            
+
         Raises:
             ConnectionError: If database operation fails
             ValueError: If invalid d_type is provided
         """
         try:
             async with cls._lock:
-                # Check if we need fresh data
-                if force_refresh or user_id not in cls._users_buffer:
-                    user = await cls._users_db.find_one({"_id": user_id})
+                if d_type and d_type not in cls._user_base:
+                    raise ValueError(f"Invalid data type: {d_type}")
+                if force_refresh:
+                    cls._invalidate_user_cache(user_id)
+                cache_key = (user_id, d_type) if d_type else user_id
+                user = cls._users_buffer.get(user_id)
+                if user is None:
+                    user = cls._users_buffer.get(cache_key)
+                loaded = user is None
+                if user is None:
+                    projection = {d_type: 1} if d_type else None
+                    if projection:
+                        user = await cls._users_db.find_one({"_id": user_id}, projection)
+                    else:
+                        user = await cls._users_db.find_one({"_id": user_id})
                     if not user:
                         user = {**copy.deepcopy(cls._user_base), "_id": user_id}
                         user["playlist"]["200"]["name"] = Config().get_playlist_config()[2]
                         try:
-                            await cls._users_db.insert_one(user)
+                            await cls._users_db.update_one({"_id": user_id}, {"$setOnInsert": user}, upsert=True)
+                            if projection:
+                                user = await cls._users_db.find_one({"_id": user_id}, projection)
+                            else:
+                                user = await cls._users_db.find_one({"_id": user_id})
                         except Exception as e:
                             raise ConnectionError(f"Failed to create user: {str(e)}")
-                    
-                    cls._users_buffer[user_id] = user
-                    cls._last_access[user_id] = time.time()
 
-                user = cls._users_buffer[user_id]
-                
+                    if d_type is None:
+                        cls._invalidate_user_cache(user_id)
+
                 if d_type:
-                    if d_type not in cls._user_base:
-                        raise ValueError(f"Invalid data type: {d_type}")
-                    user = user.setdefault(d_type, copy.deepcopy(cls._user_base.get(d_type)))
+                    result = user.setdefault(d_type, copy.deepcopy(cls._user_base.get(d_type)))
+                else:
+                    result = user
+                if loaded:
+                    cls._users_buffer[cache_key] = user
 
-                return copy.deepcopy(user) if need_copy else user
+                return copy.deepcopy(result) if need_copy else result
 
         except Exception as e:
             raise ConnectionError(f"Failed to retrieve user data: {str(e)}")
@@ -439,15 +470,15 @@ class MongoDBHandler:
     ) -> bool:
         """
         Update user data.
-        
+
         Args:
             user_id: The Discord user ID
             data: Update operations to perform
             upsert: If True, create user if doesn't exist
-            
+
         Returns:
             bool: True if update was successful
-            
+
         Raises:
             ValueError: If invalid update data is provided
             ConnectionError: If database operation fails
@@ -460,16 +491,16 @@ class MongoDBHandler:
                 {"_id": user_id},
                 data
             )
-            
+
             if not result and upsert:
                 # Try to insert if update failed and upsert is True
                 user_data = {"_id": user_id, **data.get("$set", {})}
                 await cls._users_db.insert_one(user_data)
                 cls._users_buffer[user_id] = user_data
                 return True
-                
+
             return result
-            
+
         except Exception as e:
             raise ConnectionError(f"Failed to update user: {str(e)}")
 
@@ -477,13 +508,13 @@ class MongoDBHandler:
     async def delete_user(cls, user_id: int) -> bool:
         """
         Delete a user's data completely.
-        
+
         Args:
             user_id: The Discord user ID
-            
+
         Returns:
             bool: True if deletion was successful
-            
+
         Raises:
             ConnectionError: If database operation fails
         """
@@ -491,11 +522,10 @@ class MongoDBHandler:
             async with cls._lock:
                 result = await cls._users_db.delete_one({"_id": user_id})
                 if result.deleted_count > 0:
-                    cls._users_buffer.pop(user_id, None)
-                    cls._last_access.pop(user_id, None)
+                    cls._invalidate_user_cache(user_id)
                     return True
                 return False
-                
+
         except Exception as e:
             raise ConnectionError(f"Failed to delete user: {str(e)}")
 
@@ -509,15 +539,15 @@ class MongoDBHandler:
     ) -> List[Dict[str, Any]]:
         """
         Retrieve multiple users matching specific criteria.
-        
+
         Args:
             criteria: MongoDB query criteria
             limit: Maximum number of users to return
             skip: Number of matching users to skip
-            
+
         Returns:
             List of matching user data
-            
+
         Raises:
             ConnectionError: If database operation fails
         """
@@ -525,18 +555,17 @@ class MongoDBHandler:
             cursor = cls._users_db.find(criteria).skip(skip)
             if limit:
                 cursor = cursor.limit(limit)
-                
+
             users = await cursor.to_list(length=None)
-            
+
             # Update cache with fetched users
             async with cls._lock:
-                current_time = time.time()
                 for user in users:
                     user_id = user["_id"]
+                    cls._invalidate_user_cache(user_id)
                     cls._users_buffer[user_id] = user
-                    cls._last_access[user_id] = current_time
-                    
+
             return users
-            
+
         except Exception as e:
             raise ConnectionError(f"Failed to retrieve users: {str(e)}")

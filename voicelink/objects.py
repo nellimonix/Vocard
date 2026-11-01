@@ -35,7 +35,7 @@ from .transformer import encode, decode
 if TYPE_CHECKING:
     from .pool import Node
 
-    
+
 class Track:
     """The base track object. Returns critical track information needed for parsing by Lavalink.
        You can also pass in commands.Context to get a discord.py Context object in your track.
@@ -70,7 +70,7 @@ class Track:
     ):
         if not search_type:
             search_type = Config().search_platform
-            
+
         self._track_id: Optional[str] = track_id
         self.info: dict = info
 
@@ -84,7 +84,7 @@ class Track:
         self.thumbnail: str = info.get("artworkUrl")
         self.emoji: str = Config().get_source_config(self.source, "emoji")
         self.length: float = info.get("length")
-        
+
         self.requester: Member = requester
         self.is_stream: bool = info.get("isStream", False)
         self.is_seekable: bool = info.get("isSeekable", True)
@@ -96,7 +96,7 @@ class Track:
         """Checks equality between two tracks."""
         if isinstance(other, Track):
             return other.track_id == self.track_id
-        
+
         return False
 
     def __str__(self) -> str:
@@ -114,12 +114,12 @@ class Track:
         rec_type = TrackRecType.from_platform(self.source)
         if not rec_type:
             return []
-        
+
         query = rec_type.format(track_id=self.identifier)
         tracks = await node.get_tracks(query=query, requester=node.bot.user)
         if not tracks:
             return []
-        
+
         if isinstance(tracks, Playlist):
             tracks = tracks.tracks
 
@@ -129,9 +129,9 @@ class Track:
     def track_id(self) -> str:
         if not self._track_id:
             self._track_id = encode(self.info)
-        
+
         return self._track_id
-    
+
     @property
     def formatted_length(self) -> str:
         return format_ms(self.length)
@@ -142,15 +142,15 @@ class Track:
             "track_id": self.track_id,
             "requester_id": self.requester.id
         }
-    
+
     @classmethod
     def decode(cls, track_id: str) -> dict:
         return decode(track_id)
-        
+
     @classmethod
     def encode(cls, track_info: dict) -> 'Track':
         return encode(track_info)
-    
+
 class Playlist:
     """The base playlist object.
        Returns critical playlist information needed for parsing by Lavalink.
@@ -176,7 +176,7 @@ class Playlist:
         self.name: str = playlist_info.get("name")
         self.thumbnail: str = None
         self.uri: str = None
-        
+
         self.tracks = [
             Track(track_id=track["encoded"], info=track["info"], requester=requester)
             for track in tracks

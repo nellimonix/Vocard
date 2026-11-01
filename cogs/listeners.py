@@ -41,7 +41,7 @@ class Listeners(commands.Cog):
 
         bot.loop.create_task(self.start_nodes())
         bot.loop.create_task(self.restore_last_session_players())
-        
+
     async def start_nodes(self) -> None:
         """Connect and intiate nodes."""
         for n in Config().nodes.values():
@@ -68,7 +68,7 @@ class Listeners(commands.Cog):
                     continue
                 elif not any(False if member.bot or member.voice.self_deaf else True for member in channel.members):
                     continue
-                    
+
                 dj_member = channel.guild.get_member(data.get("dj"))
                 if not dj_member:
                     continue
@@ -92,7 +92,7 @@ class Listeners(commands.Cog):
                     requester = channel.guild.get_member(track_data.get("requester_id"))
                     track = voicelink.Track(track_id=track_id, info=decoded_track, requester=requester)
                     player.queue._queue.append(track)
-                
+
                 # Restore queue settings.
                 player.queue._position = queue_data.get("position", 0) - 1
                 repeat_mode = queue_data.get("repeat_mode", "OFF")
@@ -113,7 +113,7 @@ class Listeners(commands.Cog):
 
                     if is_paused := data.get("is_paused"):
                         await player.set_pause(is_paused, self.bot.user)
-                    
+
                     if position := data.get("position"):
                         await player.seek(int(position), self.bot.user)
 
@@ -151,7 +151,7 @@ class Listeners(commands.Cog):
     async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
         if member.bot:
             return
-        
+
         if before.channel == after.channel:
             return
 
@@ -160,33 +160,33 @@ class Listeners(commands.Cog):
             return
 
         is_joined = True
-        
+
         if not before.channel and after.channel:
             if after.channel.id != player.channel.id:
                 return
 
         elif before.channel and not after.channel:
             is_joined = False
-        
+
         elif before.channel and after.channel:
             if after.channel.id != player.channel.id:
                 is_joined = False
-                
+
         if is_joined and player.settings.get("24/7", False):
-            if player.is_paused and len([m for m in player.channel.members if not m.bot or not m.voice.self_deaf]) == 1:
+            if player.is_paused and len([m for m in player.channel.members if not m.bot and m.voice and not m.voice.self_deaf]) == 1:
                 await player.set_pause(False, member)
-                    
+
         if not is_joined:
-            if not player.is_paused and len([m for m in player.channel.members if not m.bot or not m.voice.self_deaf]) == 0:
+            if not player.is_paused and len([m for m in player.channel.members if not m.bot and m.voice and not m.voice.self_deaf]) == 0:
                 player._schedule_inactive_cleanup_timer()
 
         # if dj is not in the channel, find a new DJ
         if player.dj not in player.channel.members:
             for m in player.channel.members:
-                if not m.bot or not m.voice.self_deaf:
+                if not m.bot and m.voice and not m.voice.self_deaf:
                     player.dj = m
                     break
-                    
+
         if player.is_ipc_connected:
             await player._ipc_client.send({
                 "op": "updateGuild",

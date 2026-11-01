@@ -1,14 +1,7 @@
 name: Docker Image CI
 
 on:
-  push:
-    tags:
-      - '*'  # Trigger on any tag
-    branches:
-      - main  # Trigger on push to main branch
-      - beta  # Trigger on push to beta branch
-    paths-ignore:
-      - '**.md'
+  workflow_dispatch:
 
 permissions:
   packages: write
@@ -33,7 +26,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/chocomeow/vocard
+          images: ghcr.io/${{ github.repository }}
           tags: |
             # For version tags (v1.2.3)
             type=ref,event=tag

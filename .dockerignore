@@ -1,0 +1,9 @@
+.git
+.venv
+__pycache__
+*.pyc
+logs
+data
+settings.json
+lavalink/token.txt
+PENDING_PRODUCTION.md

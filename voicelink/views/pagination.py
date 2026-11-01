@@ -32,12 +32,12 @@ from ..mongodb import MongoDBHandler
 class PaginationView(discord.ui.View):
     def __init__(self, pagination: Pagination, author: discord.Member, timeout: float = 300):
         super().__init__(timeout=timeout)
-        
+
         self.pagination: Pagination = pagination
         self.author: discord.Member = author
         self.lang: str = MongoDBHandler.get_cached_settings(author.guild.id).get("lang")
         self.update_view()
-    
+
     def update_view(self, extra_states: Optional[Dict[str, Dict[str, str]]] = None) -> None:
         """Update button states and labels based on the current pagination state."""
         texts = LangHandler._get_lang(self.lang, "pagination.prev", "pagination.next")
@@ -72,10 +72,10 @@ class PaginationView(discord.ui.View):
             if (state := button_states.get(child.custom_id)):
                 child.disabled = state.get("disabled", False)
                 child.label = state.get("label")
-    
+
     async def update_message(self, interaction: discord.Interaction) -> None:
         """Update the view and edit the message."""
-        
+
     @discord.ui.button(label='<<', custom_id="fast_back")
     async def fast_back_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         """Jump to the first page."""

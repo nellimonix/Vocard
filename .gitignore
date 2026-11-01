@@ -177,3 +177,7 @@ cython_debug/
 # Custom file
 settings.json
 logs
+lavalink/token.txt
+*.bak
+PENDING_PRODUCTION.md
+data/

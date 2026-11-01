@@ -78,7 +78,7 @@ class YTRatelimit(ABC):
                     return token
                 except Exception as e:
                     self.node._logger.error("Something wrong while updating the youtube access token.", exc_info=e)
-        
+
         self.node._logger.warning("No active token available for processing the request.")
         return None
 

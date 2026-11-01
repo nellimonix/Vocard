@@ -54,15 +54,15 @@ _RESET_LABELS: dict[str, str] = {
     "song request channel": "music_request_channel",
     "custom controller embeds": "default_controller"
 }
-         
+
 def status_icon(status: bool) -> str:
     return "✅" if status else "❌"
 
 class Settings(commands.Cog, name="settings"):
     def __init__(self, bot) -> None:
         self.bot: commands.Bot = bot
-        self.description = "This category is only available to admin permissions on the server."
-    
+        self.description = "cogDescSettings"
+
     @commands.hybrid_group(
         name="settings",
         aliases=get_aliases("settings"),
@@ -72,23 +72,13 @@ class Settings(commands.Cog, name="settings"):
         view = HelpView(self.bot, ctx.author)
         embed = view.build_embed(self.qualified_name)
         view.response = await dispatch_message(ctx, embed, view=view)
-    
-    @settings.command(name="prefix", aliases=get_aliases("prefix"))
-    @commands.has_permissions(manage_guild=True)
-    @commands.dynamic_cooldown(cooldown_check, commands.BucketType.guild)
-    async def prefix(self, ctx: commands.Context, prefix: str):
-        "Change the default prefix for message commands."
-        if not self.bot.intents.message_content:
-            return await send_localized_message(ctx, "common.error.missingIntents", "MESSAGE_CONTENT", ephemeral=True)
-        
-        await MongoDBHandler.update_settings(ctx.guild.id, {"$set": {"prefix": prefix}})
-        await send_localized_message(ctx, "settings.actions.prefixSet", prefix, prefix)
 
-    @settings.command(name="language", aliases=get_aliases("language"))
+
+    @settings.command(name='language', aliases=get_aliases('language'), description=app_commands.locale_str('Choose the bot language for this server. Bot messages will be shown in the selected language.', key='settings.language'))
     @commands.has_permissions(manage_guild=True)
     @commands.dynamic_cooldown(cooldown_check, commands.BucketType.guild)
     async def language(self, ctx: commands.Context, language: str):
-        "You can choose your preferred language, the bot message will change to the language you set."
+        'Choose the bot language for this server. Bot messages will be shown in the selected language.'
         language = language.upper()
         if language not in voicelink.LangHandler.get_all_languages():
             return await send_localized_message(ctx, "settings.actions.languageNotFound")
@@ -102,15 +92,15 @@ class Settings(commands.Cog, name="settings"):
             return [app_commands.Choice(name=lang, value=lang) for lang in voicelink.LangHandler.get_all_languages() if current.upper() in lang]
         return [app_commands.Choice(name=lang, value=lang) for lang in voicelink.LangHandler.get_all_languages()]
 
-    @settings.command(name="dj", aliases=get_aliases("dj"))
+    @settings.command(name='dj', aliases=get_aliases('dj'), description=app_commands.locale_str('Assign or remove the DJ role.', key='settings.dj'))
     @commands.has_permissions(manage_guild=True)
     @commands.dynamic_cooldown(cooldown_check, commands.BucketType.guild)
     async def dj(self, ctx: commands.Context, role: discord.Role = None):
-        "Set a DJ role or remove DJ role."
+        'Assign or remove the DJ role.'
         await MongoDBHandler.update_settings(ctx.guild.id, {"$set": {'dj': role.id}} if role else {"$unset": {'dj': None}})
         await send_localized_message(ctx, 'settings.actions.djSet', f"<@&{role.id}>" if role else "None")
 
-    @settings.command(name="queue", aliases=get_aliases("queue"))
+    @settings.command(name='queue', aliases=get_aliases('queue'), description=app_commands.locale_str('Change the queue mode.', key='settings.queue'))
     @app_commands.choices(mode=[
         app_commands.Choice(name=queue_type.capitalize(), value=queue_type)
         for queue_type in voicelink.queue.QUEUE_TYPES.keys()
@@ -118,36 +108,36 @@ class Settings(commands.Cog, name="settings"):
     @commands.has_permissions(manage_guild=True)
     @commands.dynamic_cooldown(cooldown_check, commands.BucketType.guild)
     async def queue(self, ctx: commands.Context, mode: str):
-        "Change to another type of queue mode."
+        'Change the queue mode.'
         mode = mode if mode.lower() in voicelink.queue.QUEUE_TYPES else next(iter(voicelink.queue.QUEUE_TYPES))
         await MongoDBHandler.update_settings(ctx.guild.id, {"$set": {"queue_type": mode}})
         await send_localized_message(ctx, "settings.actions.queueModeSet", mode.capitalize())
 
-    @settings.command(name="247", aliases=get_aliases("247"))
+    @settings.command(name='247', aliases=get_aliases('247'), description=app_commands.locale_str('Toggle 24/7 mode, which prevents the bot from disconnecting due to inactivity.', key='settings.247'))
     @commands.has_permissions(manage_guild=True)
     @commands.dynamic_cooldown(cooldown_check, commands.BucketType.guild)
     async def playforever(self, ctx: commands.Context):
-        "Toggles 24/7 mode, which disables automatic inactivity-based disconnects."
+        'Toggle 24/7 mode, which prevents the bot from disconnecting due to inactivity.'
         settings = await MongoDBHandler.get_settings(ctx.guild.id)
         toggle = settings.get('24/7', False)
         await MongoDBHandler.update_settings(ctx.guild.id, {"$set": {'24/7': not toggle}})
         await send_localized_message(ctx, 'settings.actions.mode247', await LangHandler.get_lang(ctx.guild.id, "common.status.enabled" if not toggle else "common.status.disabled"))
 
-    @settings.command(name="bypassvote", aliases=get_aliases("bypassvote"))
+    @settings.command(name='bypassvote', aliases=get_aliases('bypassvote'), description=app_commands.locale_str('Toggle the voting system.', key='settings.bypassvote'))
     @commands.has_permissions(manage_guild=True)
     @commands.dynamic_cooldown(cooldown_check, commands.BucketType.guild)
     async def bypassvote(self, ctx: commands.Context):
-        "Toggles voting system."
+        'Toggle the voting system.'
         settings = await MongoDBHandler.get_settings(ctx.guild.id)
         toggle = settings.get('disabled_vote', True)
         await MongoDBHandler.update_settings(ctx.guild.id, {"$set": {'disabled_vote': not toggle}})
         await send_localized_message(ctx, 'settings.actions.bypassVote', await LangHandler.get_lang(ctx.guild.id, "common.status.enabled" if not toggle else "common.status.disabled"))
 
-    @settings.command(name="view", aliases=get_aliases("view"))
+    @settings.command(name='view', aliases=get_aliases('view'), description=app_commands.locale_str('Show all bot settings on this server.', key='settings.view'))
     @commands.has_permissions(manage_guild=True)
     @commands.dynamic_cooldown(cooldown_check, commands.BucketType.guild)
     async def view(self, ctx: commands.Context):
-        "Show all the bot settings in your server."
+        'Show all bot settings on this server.'
         settings = await MongoDBHandler.get_settings(ctx.guild.id)
 
         texts = await LangHandler.get_lang(ctx.guild.id, "settings.menu", "settings.basic.title", "settings.basic.value", "settings.queue.title", "settings.queue.value", "settings.voice.title", "settings.permissions.title", "settings.permissions.value")
@@ -188,12 +178,12 @@ class Settings(commands.Cog, name="settings"):
         )
         await dispatch_message(ctx, embed)
 
-    @settings.command(name="volume", aliases=get_aliases("volume"))
-    @app_commands.describe(value="Input a integer.")
+    @settings.command(name='volume', aliases=get_aliases('volume'), description=app_commands.locale_str('Set the player volume.', key='settings.volume'))
+    @app_commands.describe(value=app_commands.locale_str('Enter an integer.', key='settings.volume.value'))
     @commands.has_permissions(manage_guild=True)
     @commands.dynamic_cooldown(cooldown_check, commands.BucketType.guild)
     async def volume(self, ctx: commands.Context, value: commands.Range[int, 1, 150]):
-        "Set the player's volume."
+        'Set the player volume.'
         player: voicelink.Player = ctx.guild.voice_client
         if player:
             await player.set_volume(value, ctx.author)
@@ -201,11 +191,11 @@ class Settings(commands.Cog, name="settings"):
         await MongoDBHandler.update_settings(ctx.guild.id, {"$set": {'volume': value}})
         await send_localized_message(ctx, 'settings.actions.volumeSet', value)
 
-    @settings.command(name="togglecontroller", aliases=get_aliases("togglecontroller"))
+    @settings.command(name='togglecontroller', aliases=get_aliases('togglecontroller'), description=app_commands.locale_str('Enable or disable the music controller.', key='settings.togglecontroller'))
     @commands.has_permissions(manage_guild=True)
     @commands.dynamic_cooldown(cooldown_check, commands.BucketType.guild)
     async def togglecontroller(self, ctx: commands.Context):
-        "Toggles the music controller."
+        'Enable or disable the music controller.'
         settings = await MongoDBHandler.get_settings(ctx.guild.id)
         toggle = not settings.get('controller', True)
 
@@ -219,11 +209,11 @@ class Settings(commands.Cog, name="settings"):
         await MongoDBHandler.update_settings(ctx.guild.id, {"$set": {'controller': toggle}})
         await send_localized_message(ctx, 'settings.actions.controllerToggled', await LangHandler.get_lang(ctx.guild.id, "common.status.enabled" if toggle else "common.status.disabled"))
 
-    @settings.command(name="duplicatetrack", aliases=get_aliases("duplicatetrack"))
+    @settings.command(name='duplicatetrack', aliases=get_aliases('duplicatetrack'), description=app_commands.locale_str('Toggle whether YaMusic prevents duplicate songs from being queued.', key='settings.duplicatetrack'))
     @commands.has_permissions(manage_guild=True)
     @commands.dynamic_cooldown(cooldown_check, commands.BucketType.guild)
     async def duplicatetrack(self, ctx: commands.Context):
-        "Toggle Vocard to prevent duplicate songs from queuing."
+        'Toggle whether YaMusic prevents duplicate songs from being queued.'
         settings = await MongoDBHandler.get_settings(ctx.guild.id)
         toggle = not settings.get('duplicate_track', False)
         player: voicelink.Player = ctx.guild.voice_client
@@ -232,88 +222,41 @@ class Settings(commands.Cog, name="settings"):
 
         await MongoDBHandler.update_settings(ctx.guild.id, {"$set": {'duplicate_track': toggle}})
         return await send_localized_message(ctx, "settings.actions.duplicateTrackToggled", await LangHandler.get_lang(ctx.guild.id, "common.status.disabled" if toggle else "common.status.enabled"))
-    
-    @settings.command(name="customcontroller", aliases=get_aliases("customcontroller"))
-    @commands.has_permissions(manage_guild=True)
-    @commands.dynamic_cooldown(cooldown_check, commands.BucketType.guild)
-    async def customcontroller(self, ctx: commands.Context):
-        "Customizes music controller embeds."
-        settings = await MongoDBHandler.get_settings(ctx.guild.id)
-        controller_settings = settings.get("default_controller", voicelink.Config().controller)
 
-        placeholder = PlayerPlaceholder(ctx.bot)
-        view = EmbedBuilderView(ctx, placeholder, controller_settings.get("embeds").copy())
-        view.response = await dispatch_message(ctx, view.build_embed(), view=view)
 
-    @settings.command(name="controllermsg", aliases=get_aliases("controllermsg"))
+    @settings.command(name='controllermsg', aliases=get_aliases('controllermsg'), description=app_commands.locale_str('Enable or disable button-press messages from the music controller.', key='settings.controllermsg'))
     @commands.has_permissions(manage_guild=True)
     @commands.dynamic_cooldown(cooldown_check, commands.BucketType.guild)
     async def controllermsg(self, ctx: commands.Context):
-        "Toggles to send a message when clicking the button in the music controller."
+        'Enable or disable button-press messages from the music controller.'
         settings = await MongoDBHandler.get_settings(ctx.guild.id)
         toggle = not settings.get('controller_msg', True)
 
         await MongoDBHandler.update_settings(ctx.guild.id, {"$set": {'controller_msg': toggle}})
         await send_localized_message(ctx, 'settings.actions.controllerMsgToggled', await LangHandler.get_lang(ctx.guild.id, "common.status.enabled" if toggle else "common.status.disabled"))
-    
-    @settings.command(name="silentmsg", aliases=get_aliases("silentmsg"))
+
+    @settings.command(name='silentmsg', aliases=get_aliases('silentmsg'), description=app_commands.locale_str('Enable or disable silent messages that are sent without notifications.', key='settings.silentmsg'))
     @commands.has_permissions(manage_guild=True)
     @commands.dynamic_cooldown(cooldown_check, commands.BucketType.guild)
     async def silentmsg(self, ctx: commands.Context):
-        "Toggle silent messaging to send discreet messages without alerting recipients."
+        'Enable or disable silent messages that are sent without notifications.'
         settings = await MongoDBHandler.get_settings(ctx.guild.id)
         toggle = not settings.get('silent_msg', False)
 
         await MongoDBHandler.update_settings(ctx.guild.id, {"$set": {'silent_msg': toggle}})
         await send_localized_message(ctx, 'settings.actions.silentMsgToggled', await LangHandler.get_lang(ctx.guild.id, "common.status.enabled" if toggle else "common.status.disabled"))
 
-    @settings.command(name="stageannounce", aliases=get_aliases("stageannounce"))
+    @settings.command(name='stageannounce', aliases=get_aliases('stageannounce'), description=app_commands.locale_str('Configure the channel status template.', key='settings.stageannounce'))
     @commands.has_permissions(manage_guild=True)
     @commands.dynamic_cooldown(cooldown_check, commands.BucketType.guild)
     async def stageannounce(self, ctx: commands.Context, template: str = None):
-        "Customize the channel topic template"
+        'Configure the channel status template.'
         await MongoDBHandler.update_settings(ctx.guild.id, {"$set": {'stage_announce_template': template}})
         await send_localized_message(ctx, "voice.stageChannel.setAnnounceTemplate")
 
-    @settings.command(name="setupchannel", aliases=get_aliases("setupchannel"))
-    @app_commands.describe(
-        channel="Provide a request channel. If not, a text channel will be generated."
-    )
-    @commands.has_permissions(manage_guild=True)
-    @commands.dynamic_cooldown(cooldown_check, commands.BucketType.guild)
-    async def setupchannel(self, ctx: commands.Context, channel: discord.TextChannel = None) -> None:
-        "Sets up a dedicated channel for song requests in your server."
-        if not self.bot.intents.message_content:
-            return await send_localized_message(ctx, "common.error.missingIntents", "MESSAGE_CONTENT", ephemeral=True)
-        
-        if not channel:
-            try:
-                overwrites = {
-                    ctx.guild.me: discord.PermissionOverwrite(
-                        read_messages=True,
-                        manage_messages=True
-                    )
-                }
-                channel = await ctx.guild.create_text_channel("vocard-song-requests", overwrites=overwrites)
-            except:
-                return await send_localized_message(ctx, "permissions.noCreatePermission")
 
-        channel_perms = channel.permissions_for(ctx.me)
-        if not channel_perms.text() and not channel_perms.manage_messages:
-            return await send_localized_message(ctx, "permissions.noCreatePermission")
-        
-        settings = await MongoDBHandler.get_settings(ctx.guild.id)
-        controller = settings.get("default_controller", voicelink.Config().controller).get("embeds", {}).get("inactive", {})        
-        message = await channel.send(embed=PlayerPlaceholder.build_embed(controller, PlayerPlaceholder(self.bot)))
-
-        await MongoDBHandler.update_settings(ctx.guild.id, {"$set": {'music_request_channel': {
-            "text_channel_id": channel.id,
-            "controller_msg_id": message.id,
-        }}})
-        await send_localized_message(ctx, "songRequest.channelCreated", channel.mention)
-
-    @settings.command(name="reset", aliases=get_aliases("reset"))
-    @app_commands.describe(setting="Which setting to restore to defaults.")
+    @settings.command(name='reset', aliases=get_aliases('reset'), description=app_commands.locale_str('Restore a server setting to its default value.', key='settings.reset'))
+    @app_commands.describe(setting=app_commands.locale_str('Select the setting to reset.', key='settings.reset.setting'))
     @app_commands.choices(setting=[
         app_commands.Choice(name=label.capitalize(), value=label)
         for label in _RESET_LABELS.keys()
@@ -321,11 +264,11 @@ class Settings(commands.Cog, name="settings"):
     @commands.has_permissions(manage_guild=True)
     @commands.dynamic_cooldown(cooldown_check, commands.BucketType.guild)
     async def reset_setting(self, ctx: commands.Context, *, setting: str):
-        "Remove one guild setting override so the bot uses its default again."
+        'Restore a server setting to its default value.'
         setting_key = _RESET_LABELS.get(setting.lower())
         if not setting_key:
             return await send_localized_message(ctx, "settings.actions.resetNotFound", ", ".join(_RESET_LABELS.keys()))
-        
+
         await MongoDBHandler.update_settings(ctx.guild.id, {"$unset": {setting_key: ""}})
         player: voicelink.Player = ctx.guild.voice_client
         if setting_key == "volume" and player:
@@ -333,7 +276,7 @@ class Settings(commands.Cog, name="settings"):
         elif setting_key == "duplicate_track" and player:
             player.queue._allow_duplicate = True
         await send_localized_message(ctx, "settings.actions.resetDone", setting.capitalize())
-        
+
     @app_commands.command(name="debug")
     async def debug(self, interaction: discord.Interaction):
         if interaction.user.id not in voicelink.Config().bot_access_user:

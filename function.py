@@ -31,7 +31,7 @@ from typing import Optional
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-logger: logging.Logger = logging.getLogger("vocard")
+logger: logging.Logger = logging.getLogger("YaMusic")
 
 if not os.path.exists(os.path.join(ROOT_DIR, "settings.json")):
     raise Exception("Settings file not set!")

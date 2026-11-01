@@ -59,7 +59,7 @@ def check_version(with_msg=False):
     latest_version = response.json().get("name", __version__)
     if with_msg:
         msg = (
-            f"{bcolors.OKGREEN}Your bot is up-to-date! - {latest_version}{bcolors.ENDC}" 
+            f"{bcolors.OKGREEN}Your bot is up-to-date! - {latest_version}{bcolors.ENDC}"
             if latest_version == __version__
             else f"{bcolors.WARNING}Your bot is not up-to-date! The latest version is {latest_version} and you are currently running version {__version__}\nRun `{PYTHON_CMD_NAME} update.py -l` to update your bot!{bcolors.ENDC}"
         )
@@ -98,7 +98,7 @@ def install(response, version):
         "is irreversible, so it's important to double-check that you're making the \n"
         f"right decision. {bcolors.ENDC} Continue with caution? (Y/n) "
     )
-        
+
     if user_input.lower() in ["y", "yes"]:
         print("Installing ...")
         zfile = zipfile.ZipFile(BytesIO(response.content))
@@ -171,21 +171,21 @@ def main():
 
     if args.check:
         check_version(with_msg=True)
-        
+
     elif args.version:
         version = args.version
         response = download_file(version)
         install(response, version)
-        
+
     elif args.latest:
         response = download_file()
         version = check_version()
         install(response, version)
-        
+
     elif args.beta:
         response = download_file("refs/heads/beta")
         install(response, "beta")
-        
+
     elif args.migration:
         run_migration()
     else:

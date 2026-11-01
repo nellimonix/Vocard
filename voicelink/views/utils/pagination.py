@@ -66,7 +66,7 @@ class Pagination(Generic[T]):
         """
         self._items.append(item)
         self.total_pages = ceil(len(self._items) / self._page_size)
-    
+
     def remove_item(self, item: T) -> None:
         """
         Removes an item from the pagination and updates total pages.
@@ -78,7 +78,7 @@ class Pagination(Generic[T]):
         self.total_pages = ceil(len(self._items) / self._page_size)
         if self._current_page >= self.total_pages:
             self._current_page = max(0, self.total_pages - 1)
-            
+
     def get_current_page_items(self) -> List[T]:
         """
         Retrieves the items for the current page.
@@ -101,7 +101,7 @@ class Pagination(Generic[T]):
     def go_page(self, page_number: int) -> None:
         """
         Navigate to a specific page, clamped between 0 and total_pages.
-        
+
         Args:
             page_number (int): The page number to navigate to (0-based).
         """
@@ -156,7 +156,7 @@ class Pagination(Generic[T]):
             int: The current page number, starting from 1.
         """
         return self._current_page + 1
-    
+
     @property
     def total_items(self) -> int:
         """

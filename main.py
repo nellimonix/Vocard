@@ -39,10 +39,10 @@ class Translator(discord.app_commands.Translator):
 
     async def load(self):
         func.logger.info("Loaded Translator")
-        
+
     async def unload(self):
         func.logger.info("Unload Translator")
-        
+
     async def translate(
         self,
         string: discord.app_commands.locale_str,
@@ -50,21 +50,24 @@ class Translator(discord.app_commands.Translator):
         context: discord.app_commands.TranslationContext
     ) -> str | None:
         locale_key = str(locale).upper()
-        local_translations = LangHandler._local_langs.get(locale_key)
-        if not local_translations:
-            return None
-
-        translated_text = local_translations.get(string.message)
+        key = string.extras.get("key", string.message)
+        local_translations = LangHandler._local_langs.get(locale_key, {})
+        translated_text = local_translations.get(key)
         if translated_text is not None:
             return translated_text
 
-        missing = self.MISSING_TRANSLATOR.setdefault(locale_key, [])
-        if string.message not in missing:
-            missing.append(string.message)
+        fallback = LangHandler._local_langs.get("EN-US", {}).get(key)
+        if fallback is not None:
+            return fallback
+
+        if "." in key and key.isascii():
+            missing = self.MISSING_TRANSLATOR.setdefault(locale_key, [])
+            if key not in missing:
+                missing.append(key)
 
         return None
 
-class Vocard(commands.Bot):
+class Vocard(commands.AutoShardedBot):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -75,18 +78,22 @@ class Vocard(commands.Bot):
         if message.author.bot or not message.guild:
             return False
 
+        if not self.intents.message_content:
+            return
+
         # Check if the bot is directly mentioned
         if message.content.strip() == self.user.mention and not message.mention_everyone:
             prefix = await self.command_prefix(self, message)
             if not prefix:
-                return await message.channel.send("I don't have a bot prefix set.")
-            return await message.channel.send(f"My prefix is `{prefix}`")
+                return await message.channel.send(await LangHandler.get_lang(message.guild.id, "noPrefixSet"))
+            text = await LangHandler.get_lang(message.guild.id, "myPrefix")
+            return await message.channel.send(text.format(prefix))
 
         # Fetch guild settings and check if the mesage is in the music request channel
         settings = await MongoDBHandler.get_settings(message.guild.id)
         if settings and (request_channel := settings.get("music_request_channel")):
             if message.channel.id == request_channel.get("text_channel_id"):
-                ctx = await self.get_context(message)    
+                ctx = await self.get_context(message)
                 try:
                     if not ctx.prefix:
                         cmd = self.get_command("play")
@@ -128,11 +135,12 @@ class Vocard(commands.Bot):
             except Exception as e:
                 func.logger.error(f"Cannot connected to dashboard! - Reason: {e}")
 
-        # Update version tracking
-        if not bot_config.version or bot_config.version != update.__version__:
+        settings = func.open_json("settings.json")
+        current_version = settings.get("version", "")
+        if settings.get("_synced_version") != current_version or settings.get("_synced_upstream_version") != update.__version__:
             await self.tree.sync()
-            func.update_json("settings.json", new_data={"version": update.__version__})
-            
+            func.update_json("settings.json", {"_synced_version": current_version, "_synced_upstream_version": update.__version__})
+
             for locale_key, values in self.tree.translator.MISSING_TRANSLATOR.items():
                 func.logger.warning(f'Missing translation for "{", ".join(values)}" in "{locale_key}"')
             self.tree.translator.MISSING_TRANSLATOR.clear()
@@ -148,7 +156,6 @@ class Vocard(commands.Bot):
         func.logger.info("------------------")
 
         bot_config.client_id = self.user.id
-        LangHandler._local_langs.clear()
 
     async def on_command_error(self, ctx: commands.Context, exception, /) -> None:
         error = getattr(exception, 'original', exception)
@@ -183,20 +190,27 @@ class Vocard(commands.Bot):
             pass
 
 class CommandCheck(discord.app_commands.CommandTree):
+    async def on_error(self, interaction: discord.Interaction, error: discord.app_commands.AppCommandError, /) -> None:
+        if isinstance(error, discord.app_commands.CommandNotFound):
+            return
+        await super().on_error(interaction, error)
+
     async def interaction_check(self, interaction: discord.Interaction, /) -> bool:
         if interaction.type == discord.InteractionType.application_command:
             if not interaction.guild:
-                await interaction.response.send_message("This command can only be used in guilds!")
+                await interaction.response.send_message(LangHandler._get_lang(None, "guildsOnly"), ephemeral=True)
                 return False
 
             channel_perm = interaction.channel.permissions_for(interaction.guild.me)
             if not channel_perm.read_messages or not channel_perm.send_messages:
-                await interaction.response.send_message("I don't have permission to read or send messages in this channel.", ephemeral=True)
+                await interaction.response.send_message(await LangHandler.get_lang(interaction.guild.id, "noChannelPerm"), ephemeral=True)
                 return False
-            
+
         return True
 
 async def get_prefix(bot: commands.Bot, message: discord.Message) -> str:
+    if not bot.intents.message_content:
+        return ""
     settings = await MongoDBHandler.get_settings(message.guild.id)
     prefix = settings.get("prefix", bot_config.bot_prefix)
     return prefix if prefix is not None else ""
@@ -211,7 +225,7 @@ if (LOG_FILE := LOG_SETTINGS.get("file", {})).get("enable", True):
     if not os.path.exists(log_path):
         os.makedirs(log_path)
 
-    file_handler = TimedRotatingFileHandler(filename=f'{log_path}/vocard.log', encoding="utf-8", backupCount=LOG_SETTINGS.get("max_history", 30), when="d")
+    file_handler = TimedRotatingFileHandler(filename=f'{log_path}/yamusicbot.log', encoding="utf-8", backupCount=LOG_SETTINGS.get("max_history", LOG_SETTINGS.get("max-history", 30)), when="d")
     file_handler.namer = lambda name: name.replace(".log", "") + ".log"
     file_handler.setFormatter(logging.Formatter('{asctime} [{levelname:<8}] {name}: {message}', '%Y-%m-%d %H:%M:%S', style='{'))
     logging.getLogger().addHandler(file_handler)
@@ -222,7 +236,7 @@ for log_name, log_level in LOG_SETTINGS.get("level", {}).items():
 
 # Setup the bot object
 intents = discord.Intents.default()
-intents.message_content = False if bot_config.bot_prefix is None else True
+intents.message_content = False
 intents.members = bot_config.ipc_client.get("enable", False)
 intents.voice_states = True
 intents.presences = False
@@ -238,5 +252,4 @@ bot = Vocard(
 )
 
 if __name__ == "__main__":
-    update.check_version(with_msg=True)
     bot.run(bot_config.token, root_logger=True)

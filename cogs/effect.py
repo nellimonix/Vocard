@@ -50,7 +50,7 @@ async def check_access(ctx: commands.Context):
 class Effect(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
-        self.description = "This category is only available to DJ on this server. (You can setdj on your server by /settings setdj <DJ ROLE>)"
+        self.description = "cogDescEffect"
 
     async def effect_autocomplete(self, interaction: discord.Interaction, current: str) -> list:
         player: voicelink.Player = interaction.guild.voice_client
@@ -60,11 +60,11 @@ class Effect(commands.Cog):
             return [app_commands.Choice(name=effect.tag, value=effect.tag) for effect in player.filters.get_filters() if current in effect.tag]
         return [app_commands.Choice(name=effect.tag, value=effect.tag) for effect in player.filters.get_filters()]
 
-    @commands.hybrid_command(name="speed", aliases=get_aliases("speed"))
-    @app_commands.describe(value="The value to set the speed to. Default is `1.0`")
+    @commands.hybrid_command(name='speed', aliases=get_aliases('speed'), description=app_commands.locale_str('Set the playback speed of the player.', key='effect.speed'))
+    @app_commands.describe(value=app_commands.locale_str('The value to set the speed to. Default is `1.0`.', key='effect.speed.value'))
     @commands.dynamic_cooldown(cooldown_check, commands.BucketType.guild)
     async def speed(self, ctx: commands.Context, value: commands.Range[float, 0, 2]):
-        "Sets the player's playback speed"
+        'Set the playback speed of the player.'
         player = await check_access(ctx)
 
         if player.filters.has_filter(filter_tag="speed"):
@@ -74,16 +74,11 @@ class Effect(commands.Cog):
         await player.add_filter(effect, ctx.author)
         await send_localized_message(ctx, "effects.added", effect.tag)
 
-    @commands.hybrid_command(name="karaoke", aliases=get_aliases("karaoke"))
-    @app_commands.describe(
-        level="The level of the karaoke. Default is `1.0`",
-        monolevel="The monolevel of the karaoke. Default is `1.0`",
-        filterband="The filter band of the karaoke. Default is `220.0`",
-        filterwidth="The filter band of the karaoke. Default is `100.0`"
-    )
+    @commands.hybrid_command(name='karaoke', aliases=get_aliases('karaoke'), description=app_commands.locale_str('Use equalization to eliminate part of the frequency range, typically targeting vocals.', key='effect.karaoke'))
+    @app_commands.describe(level=app_commands.locale_str('The karaoke level. Default is `1.0`.', key='effect.karaoke.level'), monolevel=app_commands.locale_str('The karaoke mono level. Default is `1.0`.', key='effect.karaoke.monolevel'), filterband=app_commands.locale_str('The karaoke filter band. Default is `220.0`.', key='effect.karaoke.filterband'), filterwidth=app_commands.locale_str('The karaoke filter width. Default is `100.0`.', key='effect.karaoke.filterwidth'))
     @commands.dynamic_cooldown(cooldown_check, commands.BucketType.guild)
     async def karaoke(self, ctx: commands.Context, level: commands.Range[float, 0, 2] = 1.0, monolevel: commands.Range[float, 0, 2] = 1.0, filterband: commands.Range[float, 100, 300] = 220.0, filterwidth: commands.Range[float, 50, 150] = 100.0) -> None:
-        "Uses equalization to eliminate part of a band, usually targeting vocals."
+        'Use equalization to eliminate part of the frequency range, typically targeting vocals.'
         player = await check_access(ctx)
 
         if player.filters.has_filter(filter_tag="karaoke"):
@@ -93,14 +88,11 @@ class Effect(commands.Cog):
         await player.add_filter(effect, ctx.author)
         await send_localized_message(ctx, "effects.added", effect.tag)
 
-    @commands.hybrid_command(name="tremolo", aliases=get_aliases("tremolo"))
-    @app_commands.describe(
-        frequency="The frequency of the tremolo. Default is `2.0`",
-        depth="The depth of the tremolo. Default is `0.5`"
-    )
+    @commands.hybrid_command(name='tremolo', aliases=get_aliases('tremolo'), description=app_commands.locale_str('Create a trembling effect where the volume oscillates rapidly.', key='effect.tremolo'))
+    @app_commands.describe(frequency=app_commands.locale_str('The tremolo frequency. Default is `2.0`.', key='effect.tremolo.frequency'), depth=app_commands.locale_str('The tremolo depth. Default is `0.5`.', key='effect.tremolo.depth'))
     @commands.dynamic_cooldown(cooldown_check, commands.BucketType.guild)
     async def tremolo(self, ctx: commands.Context, frequency: commands.Range[float, 0, 10] = 2.0, depth: commands.Range[float, 0, 1] = 0.5) -> None:
-        "Uses amplification to create a shuddering effect, where the volume quickly oscillates."
+        'Create a trembling effect where the volume oscillates rapidly.'
         player = await check_access(ctx)
 
         if player.filters.has_filter(filter_tag="tremolo"):
@@ -110,14 +102,11 @@ class Effect(commands.Cog):
         await player.add_filter(effect, ctx.author)
         await send_localized_message(ctx, "effects.added", effect.tag)
 
-    @commands.hybrid_command(name="vibrato", aliases=get_aliases("vibrato"))
-    @app_commands.describe(
-        frequency="The frequency of the vibrato. Default is `2.0`",
-        depth="The Depth of the vibrato. Default is `0.5`"
-    )
+    @commands.hybrid_command(name='vibrato', aliases=get_aliases('vibrato'), description=app_commands.locale_str('Similar to tremolo, but changes pitch instead of volume.', key='effect.vibrato'))
+    @app_commands.describe(frequency=app_commands.locale_str('The vibrato frequency. Default is `2.0`.', key='effect.vibrato.frequency'), depth=app_commands.locale_str('The vibrato depth. Default is `0.5`.', key='effect.vibrato.depth'))
     @commands.dynamic_cooldown(cooldown_check, commands.BucketType.guild)
     async def vibrato(self, ctx: commands.Context, frequency: commands.Range[float, 0, 14] = 2.0, depth: commands.Range[float, 0, 1] = 0.5) -> None:
-        "Similar to tremolo. While tremolo oscillates the volume, vibrato oscillates the pitch."
+        'Similar to tremolo, but changes pitch instead of volume.'
         player = await check_access(ctx)
 
         if player.filters.has_filter(filter_tag="vibrato"):
@@ -127,11 +116,11 @@ class Effect(commands.Cog):
         await player.add_filter(effect, ctx.author)
         await send_localized_message(ctx, "effects.added", effect.tag)
 
-    @commands.hybrid_command(name="rotation", aliases=get_aliases("rotation"))
-    @app_commands.describe(hertz="The hertz of the rotation. Default is `0.2`")
+    @commands.hybrid_command(name='rotation', aliases=get_aliases('rotation'), description=app_commands.locale_str('Rotates the sound around stereo channels / headphones, also known as audio panning.', key='effect.rotation'))
+    @app_commands.describe(hertz=app_commands.locale_str('The rotation frequency. Default is `0.2`.', key='effect.rotation.hertz'))
     @commands.dynamic_cooldown(cooldown_check, commands.BucketType.guild)
     async def rotation(self, ctx: commands.Context, hertz: commands.Range[float, 0, 2] = 0.2) -> None:
-        "Rotates the sound around the stereo channels/user headphones aka Audio Panning."
+        'Rotates the sound around stereo channels / headphones, also known as audio panning.'
         player = await check_access(ctx)
 
         if player.filters.has_filter(filter_tag="rotation"):
@@ -141,10 +130,10 @@ class Effect(commands.Cog):
         await player.add_filter(effect, ctx.author)
         await send_localized_message(ctx, "effects.added", effect.tag)
 
-    @commands.hybrid_command(name="distortion", aliases=get_aliases("distortion"))
+    @commands.hybrid_command(name='distortion', aliases=get_aliases('distortion'), description=app_commands.locale_str('Distortion effect. It can generate quite unique sound effects.', key='effect.distortion'))
     @commands.dynamic_cooldown(cooldown_check, commands.BucketType.guild)
     async def distortion(self, ctx: commands.Context) -> None:
-        "Distortion effect. It can generate some pretty unique audio effects."
+        'Distortion effect. It can generate quite unique sound effects.'
         player = await check_access(ctx)
 
         if player.filters.has_filter(filter_tag="distortion"):
@@ -154,11 +143,11 @@ class Effect(commands.Cog):
         await player.add_filter(effect, ctx.author)
         await send_localized_message(ctx, "effects.added", effect.tag)
 
-    @commands.hybrid_command(name="lowpass", aliases=get_aliases("lowpass"))
-    @app_commands.describe(smoothing="The level of the lowPass. Default is `20.0`")
+    @commands.hybrid_command(name='lowpass', aliases=get_aliases('lowpass'), description=app_commands.locale_str('A filter that suppresses higher frequencies and passes lower ones.', key='effect.lowpass'))
+    @app_commands.describe(smoothing=app_commands.locale_str('The level of the low pass filter. Default is `20.0`.', key='effect.lowpass.smoothing'))
     @commands.dynamic_cooldown(cooldown_check, commands.BucketType.guild)
     async def lowpass(self, ctx: commands.Context, smoothing: commands.Range[float, 10, 30] = 20.0) -> None:
-        "Filter which supresses higher frequencies and allows lower frequencies to pass."
+        'A filter that suppresses higher frequencies and passes lower ones.'
         player = await check_access(ctx)
 
         if player.filters.has_filter(filter_tag="lowpass"):
@@ -168,16 +157,11 @@ class Effect(commands.Cog):
         await player.add_filter(effect, ctx.author)
         await send_localized_message(ctx, "effects.added", effect.tag)
 
-    @commands.hybrid_command(name="channelmix", aliases=get_aliases("channelmix"))
-    @app_commands.describe(
-        left_to_left="Sounds from left to left. Default is `1.0`",
-        right_to_right="Sounds from right to right. Default is `1.0`",
-        left_to_right="Sounds from left to right. Default is `0.0`",
-        right_to_left="Sounds from right to left. Default is `0.0`"
-    )
+    @commands.hybrid_command(name='channelmix', aliases=get_aliases('channelmix'), description=app_commands.locale_str('A filter that manually adjusts the audio panning.', key='effect.channelmix'))
+    @app_commands.describe(left_to_left=app_commands.locale_str('Left to left sound. Default is `1.0`.', key='effect.channelmix.ltl'), right_to_right=app_commands.locale_str('Right to right sound. Default is `1.0`.', key='effect.channelmix.rtr'), left_to_right=app_commands.locale_str('Left to right sound. Default is `0.0`.', key='effect.channelmix.ltr'), right_to_left=app_commands.locale_str('Right to left sound. Default is `0.0`.', key='effect.channelmix.rtl'))
     @commands.dynamic_cooldown(cooldown_check, commands.BucketType.guild)
     async def channelmix(self, ctx: commands.Context, left_to_left: commands.Range[float, 0, 1] = 1.0, right_to_right: commands.Range[float, 0, 1] = 1.0, left_to_right: commands.Range[float, 0, 1] = 0.0, right_to_left: commands.Range[float, 0, 1] = 0.0) -> None:
-        "Filter which manually adjusts the panning of the audio."
+        'A filter that manually adjusts the audio panning.'
         player = await check_access(ctx)
 
         if player.filters.has_filter(filter_tag="channelmix"):
@@ -187,49 +171,49 @@ class Effect(commands.Cog):
         await player.add_filter(effect, ctx.author)
         await send_localized_message(ctx, "effects.added", effect.tag)
 
-    @commands.hybrid_command(name="nightcore", aliases=get_aliases("nightcore"))
+    @commands.hybrid_command(name='nightcore', aliases=get_aliases('nightcore'), description=app_commands.locale_str('Add a nightcore filter to your player.', key='effect.nightcore'))
     @commands.dynamic_cooldown(cooldown_check, commands.BucketType.guild)
     async def nightcore(self, ctx: commands.Context) -> None:
-        "Add nightcore filter into your player."
+        'Add a nightcore filter to your player.'
         player = await check_access(ctx)
 
         effect = voicelink.Timescale.nightcore()
         await player.add_filter(effect, ctx.author)
         await send_localized_message(ctx, "effects.added", effect.tag)
 
-    @commands.hybrid_command(name="8d", aliases=get_aliases("8d"))
+    @commands.hybrid_command(name='8d', aliases=get_aliases('8d'), description=app_commands.locale_str('Add an 8D filter to your player.', key='effect.8d'))
     @commands.dynamic_cooldown(cooldown_check, commands.BucketType.guild)
     async def eightD(self, ctx: commands.Context) -> None:
-        "Add 8D filter into your player."
+        'Add an 8D filter to your player.'
         player = await check_access(ctx)
 
         effect = voicelink.Rotation.nightD()
         await player.add_filter(effect, ctx.author)
         await send_localized_message(ctx, "effects.added", effect.tag)
 
-    @commands.hybrid_command(name="vaporwave", aliases=get_aliases("vaporwave"))
+    @commands.hybrid_command(name='vaporwave', aliases=get_aliases('vaporwave'), description=app_commands.locale_str('Add a vaporwave filter to your player.', key='effect.vaporwave'))
     @commands.dynamic_cooldown(cooldown_check, commands.BucketType.guild)
     async def vaporwave(self, ctx: commands.Context) -> None:
-        "Add vaporwave filter into your player."
+        'Add a vaporwave filter to your player.'
         player = await check_access(ctx)
 
         effect = voicelink.Timescale.vaporwave()
         await player.add_filter(effect, ctx.author)
         await send_localized_message(ctx, "effects.added", effect.tag)
 
-    @commands.hybrid_command(name="cleareffect", aliases=get_aliases("cleareffect"))
-    @app_commands.describe(effect="Remove a specific sound effects.")
+    @commands.hybrid_command(name='cleareffect', aliases=get_aliases('cleareffect'), description=app_commands.locale_str('Clear all or specific sound effects.', key='effect.cleareffect'))
+    @app_commands.describe(effect=app_commands.locale_str('Remove specific sound effects.', key='effect.cleareffect.effect'))
     @app_commands.autocomplete(effect=effect_autocomplete)
     @commands.dynamic_cooldown(cooldown_check, commands.BucketType.guild)
     async def cleareffect(self, ctx: commands.Context, effect: str = None) -> None:
-        "Clear all or specific sound effects."
+        'Clear all or specific sound effects.'
         player = await check_access(ctx)
 
         if effect:
             await player.remove_filter(effect)
         else:
             await player.reset_filter()
-            
+
         await send_localized_message(ctx, "effects.cleared")
 
 async def setup(bot: commands.Bot) -> None:

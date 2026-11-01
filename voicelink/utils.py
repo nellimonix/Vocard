@@ -202,7 +202,7 @@ class Ping:
 
     def get_ping(self):
         s = self._create_socket(socket.AF_INET, socket.SOCK_STREAM)
-     
+
         cost_time = self.timer.cost(
             (s.connect, s.shutdown),
             ((self._host, self._port), None))
@@ -219,15 +219,15 @@ class TempCtx():
 def format_to_ms(time_str: str) -> int:
     """
     Converts a time string in one of the formats ('HH:MM:SS', 'MM:SS', 'SS') to milliseconds.
-    
+
     Args:
         time_str (str): The input time string.
-    
+
     Returns:
         int: Time in milliseconds, or 0 if parsing fails.
     """
     formats = ['%H:%M:%S', '%M:%S', '%S']
-    
+
     for fmt in formats:
         try:
             parsed = time.strptime(time_str, fmt)
@@ -235,19 +235,19 @@ def format_to_ms(time_str: str) -> int:
             return total_seconds * 1000
         except ValueError:
             continue
-    
+
     return 0
 
 def format_ms(milliseconds: Union[float, int]) -> str:
     """
     Converts milliseconds to a formatted time string.
-    
+
     Args:
         milliseconds (int): The time in milliseconds.
-        
+
     Returns:
         str: The formatted time string.
-        
+
     Examples:
         65000 -> "01:05"
         3723000 -> "1:02:03"
@@ -255,7 +255,7 @@ def format_ms(milliseconds: Union[float, int]) -> str:
     """
     if isinstance(milliseconds, float):
         milliseconds = int(milliseconds)
-        
+
     seconds = (milliseconds // 1000) % 60
     minutes = (milliseconds // 60_000) % 60
     hours = (milliseconds // 3_600_000) % 24
@@ -273,13 +273,13 @@ def format_bytes(bytes: int, unit: bool = False):
     Args:
         bytes (int): The number of bytes.
         unit (bool): If True, appends the unit (MB or GB) to the result.
-        
+
     Returns:
         str: The formatted string.
     """
     if bytes <= 1_000_000_000:
         return f"{bytes / (1024 ** 2):.1f}" + ("MB" if unit else "")
-    
+
     else:
         return f"{bytes / (1024 ** 3):.1f}" + ("GB" if unit else "")
 
@@ -328,7 +328,7 @@ async def dispatch_message(
     # Determine the text to send
     embed = content if isinstance(content, discord.Embed) else None
     text = None if embed else str(content).format(*params) if params else str(content)
-        
+
     # Determine the sending function
     send_func = (
         ctx.send if isinstance(ctx, commands.Context) else
@@ -345,18 +345,18 @@ async def dispatch_message(
         "allowed_mentions": discord.AllowedMentions().none(),
         "silent": settings.get("silent_msg", False),
     }
-    
+
     if file:
         send_kwargs["file"] = file
-    
+
     if view:
         send_kwargs["view"] = view
-        
+
     if "delete_after" in send_func.__code__.co_varnames:
-        if delete_after is discord.utils.MISSING and settings and ctx.channel.id == settings.get("music_request_channel", {}).get("text_channel_id"):
+        if delete_after is discord.utils.MISSING and not ephemeral and settings and ctx.channel.id == settings.get("music_request_channel", {}).get("text_channel_id"):
             delete_after = 10
         send_kwargs["delete_after"] = delete_after if delete_after is not discord.utils.MISSING else None
-    
+
     if "ephemeral" in send_func.__code__.co_varnames:
         send_kwargs["ephemeral"] = ephemeral
 
@@ -365,9 +365,9 @@ async def dispatch_message(
 
     if isinstance(message, discord.InteractionCallbackResponse):
         message = message.resource
-    
+
     if requires_fetch and isinstance(message, (discord.WebhookMessage, discord.InteractionMessage)):
-        message = await message.fetch()
+        message = await ctx.channel.fetch_message(message.id)
 
     return message
 
@@ -395,7 +395,7 @@ async def send_localized_message(
         localized_text = LangHandler._get_lang(language, content_key)
     else:
         localized_text = await LangHandler.get_lang(ctx.guild.id, content_key)
-    
+
     if localized_text:
         try:
             formatted_text = localized_text.format(*params)

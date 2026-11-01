@@ -19,11 +19,15 @@
                 },
                 "strategy": "LoadBalance"
             }
-        }   
+        }
     },
     "prefix": "?",
     "activity": [
-        {"type": "listening", "name": "/help", "status": "online"}
+        {
+            "type": "listening",
+            "name": "/help",
+            "status": "online"
+        }
     ],
     "logging": {
         "file": {
@@ -33,14 +37,15 @@
         "level": {
             "discord": "INFO",
             "vocard": "INFO",
-            "ipc_client": "INFO"
+            "ipc_client": "INFO",
+            "YaMusic": "INFO"
         },
         "max_history": 30
     },
     "bot_access_user": [],
-    "embed_color":"0xb3b3b3",
+    "embed_color": "0xb3b3b3",
     "default_max_queue": 1000,
-    "default_search_platform": "youtube",
+    "default_search_platform": "yandexmusic",
     "lyrics_platform": "lrclib",
     "ipc_client": {
         "host": "127.0.0.1",
@@ -103,27 +108,35 @@
         "others": {
             "emoji": "🔗",
             "color": "0xb3b3b3"
+        },
+        "yandexmusic": {
+            "emoji": "<:ym_yamusic:1374258185359196191>",
+            "color": "0xFECD34"
+        },
+        "vkmusic": {
+            "emoji": "<:ym_vkmusic:1374258169722703934>",
+            "color": "0x0177FD"
         }
     },
     "default_controller": {
         "embeds": {
             "active": {
-                "description": "**Now Playing: ```[@@track_name@@]```\nLink: [Click Me](@@track_url@@) | Requester: @@track_requester_mention@@ | DJ: @@dj@@**",
+                "description": "[`@@track_name@@ — @@track_author@@`](@@track_url@@)\n> <:ym_music:1374251510191489095> **Длительность:** @@track_duration@@\n> <:ym_list:1374251395733000192> **В очереди:** @@queue_length@@\n> <:ym_user:1374251078169923645> **Добавил:** @@track_requester_mention@@",
                 "footer": {
-                    "text": "Queue Length: @@queue_length@@ | Duration: @@track_duration@@ | Volume: @@volume@@% {{loop_mode != 'Off' ?? | Repeat: @@loop_mode@@}}"
+                    "text": "Источник: @@track_source_name@@ | Громкость: @@volume@@% {{loop_mode != 'Off' ?? | Повтор: @@loop_mode@@}}"
                 },
-                "image": "@@track_thumbnail@@",
+                "image": "https://cover.yamusic.app/track/random.png?title=@@track_name@@&artist=@@track_author@@&image=@@track_thumbnail@@&duration=@@track_duration@@&added_by=@@track_requester_name@@",
                 "author": {
-                    "name": "Music Controller | @@channel_name@@",
-                    "icon_url": "@@bot_icon@@"
+                    "name": "Музыкальный плеер",
+                    "icon_url": "https://i.imgur.com/noUMXgY.gif"
                 },
                 "color": "@@track_color@@"
             },
             "inactive": {
                 "title": {
-                    "name": "There are no songs playing right now"
+                    "name": "Сейчас не воспроизводится ни одна песня"
                 },
-                "description": "[Support](@@server_invite_link@@) | [Invite](@@invite_link@@) | [Questionnaire](https://forms.gle/Qm8vjBfg2kp13YGD7)",
+                "description": "[Поддержа](@@server_invite_link@@) | [Пригласить](@@invite_link@@)",
                 "image": "https://i.imgur.com/dIFBwU7.png",
                 "color": "@@default_embed_color@@"
             }
@@ -132,28 +145,61 @@
             {
                 "back": {
                     "emoji": "⏮️",
-                    "label": "@@t_player.buttons.back@@"
+                    "label": ""
                 },
                 "play-pause": {
                     "states": {
                         "pause": {
-                            "emoji": "⏸️",
-                            "label": "@@t_player.buttons.pause@@"
+                            "emoji": "<:ym_pause:1374251223007629342>",
+                            "label": ""
                         },
                         "resume": {
-                            "emoji": "▶️",
-                            "label": "@@t_player.buttons.resume@@"
+                            "emoji": "<:ym_play:1374251163012173834>",
+                            "label": ""
                         }
                     }
                 },
                 "skip": {
-                    "emoji": "⏭️",
-                    "label": "@@t_player.buttons.skip@@"
+                    "emoji": "<:ym_forward_step:1374251273087619132>",
+                    "label": ""
+                },
+                "forward": {
+                    "emoji": "<:ym_forward_fast:1374251335830077490>",
+                    "label": ""
                 },
                 "stop": {
-                    "emoji": "⏹️",
-                    "label": "@@t_player.buttons.leave@@",
+                    "emoji": "<:ym_stop:1374254552601202810>",
+                    "label": "",
                     "style": "red"
+                }
+            },
+            {
+                "shuffle": {
+                    "emoji": "<:ym_shuffle:1374251374237192274>",
+                    "label": "Перемешать"
+                },
+                "loop": {
+                    "states": {
+                        "off": {
+                            "emoji": "<:ym_repeat:1374251354628821012>",
+                            "label": "",
+                            "style": "grey"
+                        },
+                        "track": {
+                            "emoji": "<:ym_repeat:1374251354628821012>",
+                            "label": "",
+                            "style": "green"
+                        },
+                        "queue": {
+                            "emoji": "🔂",
+                            "label": "",
+                            "style": "blurple"
+                        }
+                    }
+                },
+                "lyrics": {
+                    "emoji": "📜",
+                    "label": ""
                 },
                 "add-fav": {
                     "emoji": "❤️",
@@ -162,21 +208,37 @@
             },
             {
                 "tracks": {
-                    "label": "@@t_player.dropdown.trackSelect@@",
+                    "label": "@@t_playerDropdown@@",
                     "max_options": 10
                 }
             }
         ]
     },
-    "default_voice_status_template": "{{@@track_name@@ != 'None' ?? @@track_source_emoji@@ Now Playing: @@track_name@@ // Waiting for song requests}}",
+    "default_voice_status_template": "{{@@track_name@@ != 'None' ?? @@track_source_emoji@@ Сейчас играет: @@track_name@@  // Ожидание запросов на песни}}",
     "cooldowns": {
-        "connect": [2, 30],
-        "playlist view": [1, 30]
+        "connect": [
+            2,
+            30
+        ],
+        "playlist view": [
+            1,
+            30
+        ]
     },
     "aliases": {
-        "connect": ["join"],
-        "leave": ["stop", "bye"],
-        "play": ["p"],
-        "view": ["v"]
-    }
+        "connect": [
+            "join"
+        ],
+        "leave": [
+            "stop",
+            "bye"
+        ],
+        "play": [
+            "p"
+        ],
+        "view": [
+            "v"
+        ]
+    },
+    "version": "v2.7.3"
 }

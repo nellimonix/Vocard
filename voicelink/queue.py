@@ -43,9 +43,9 @@ class LoopTypeCycle:
         temp_cycle = cycle(LoopType)
         while next(temp_cycle) != self.current:
             pass
-        
+
         return next(temp_cycle)
-    
+
     def set_mode(self, value: LoopType) -> LoopType:
         while next(self._cycle) != value:
             pass
@@ -55,7 +55,7 @@ class LoopTypeCycle:
     @property
     def mode(self) -> LoopType:
         return self.current
-    
+
     def __str__(self) -> str:
         return self.current.name.capitalize()
 
@@ -166,7 +166,7 @@ class Queue:
             for i, track in enumerate(self._queue[pos + index: pos + index2 + 1]):
                 if member and track.requester != member:
                     continue
-            
+
                 self._queue.remove(track)
                 removed_tracks[pos + index + i] = track
 
@@ -187,7 +187,7 @@ class Queue:
     @property
     def count(self) -> int:
         return len(self._queue[self._position:])
-    
+
     @property
     def repeat(self) -> str:
         return self._repeat.mode.name.capitalize()
@@ -224,7 +224,7 @@ class FairQueue(Queue):
 
         self.put_at_index(lastIndex, item)
         return lastIndex
-    
+
 QUEUE_TYPES: Dict[str, Queue] = {
     "queue": Queue,
     "fairqueue": FairQueue

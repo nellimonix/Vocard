@@ -58,10 +58,10 @@ class EmbedBuilderView(discord.ui.View):
         self.original_data: dict = copy.deepcopy(data)
         self.data: dict = copy.deepcopy(data)
         self.embed_type: str = "active"
-    
+
     def build_embed(self) -> discord.Embed:
         return PlayerPlaceholder.build_embed(self.data.get(self.embed_type, {}), self.ph)
-    
+
     async def on_timeout(self):
         for child in self.children:
             child.disabled = True
@@ -177,7 +177,7 @@ class EmbedBuilderView(discord.ui.View):
         if v['name'] != "":
             if "author" not in data:
                 data["author"] = {}
-                
+
             data["author"]["name"] = v['name']
             data["author"]["url"] = v['url']
             data["author"]["icon_url"] = v['icon_url']
@@ -185,7 +185,7 @@ class EmbedBuilderView(discord.ui.View):
             del data["author"]
 
         return await self.response.edit(embed=self.build_embed())
-    
+
     @discord.ui.button(label="Edit Image")
     async def edit_image(self, interaction: discord.Interaction, button: discord.ui.Button):
         data = self.data.get(self.embed_type, {})
@@ -220,7 +220,7 @@ class EmbedBuilderView(discord.ui.View):
         data["image"] = v['image']
 
         return await self.response.edit(embed=self.build_embed())
-    
+
     @discord.ui.button(label="Edit Footer")
     async def edit_footer(self, interaction: discord.Interaction, button: discord.ui.Button):
         data = self.data.get(self.embed_type, {})
@@ -258,7 +258,7 @@ class EmbedBuilderView(discord.ui.View):
         data["footer"]["icon_url"] = v['icon_url']
 
         return await self.response.edit(embed=self.build_embed())
-    
+
     @discord.ui.button(label="Add Field", style=discord.ButtonStyle.green, row=1)
     async def add_field(self, interaction: discord.Interaction, button: discord.ui.Button):
         data = self.data.get(self.embed_type)
@@ -267,7 +267,7 @@ class EmbedBuilderView(discord.ui.View):
 
         if len(data["fields"]) >= 25:
             return await interaction.response.send_message("You have already reached the maximum of fields!", ephemeral=True)
-        
+
         modal = BaseModal(
             title="Add Field",
             custom_id="add_field",
@@ -304,7 +304,7 @@ class EmbedBuilderView(discord.ui.View):
         })
 
         return await self.response.edit(embed=self.build_embed())
-    
+
     @discord.ui.button(label="Remove Field", style=discord.ButtonStyle.red, row=1)
     async def remove_field(self, interaction: discord.Interaction, button: discord.ui.Button):
         data = self.data.get(self.embed_type)
@@ -313,7 +313,7 @@ class EmbedBuilderView(discord.ui.View):
 
         if len(data["fields"]) == 0:
             return await interaction.response.send_message("There are no fields to remove!", ephemeral=True)
-        
+
         modal = BaseModal(
             title="Remove Field",
             custom_id="remove_field",
@@ -332,7 +332,7 @@ class EmbedBuilderView(discord.ui.View):
             del data["fields"][int(modal.values["index"])]
         except:
             return await interaction.followup.send("Can't found the field", ephemeral=True)
-        
+
         return await self.response.edit(embed=self.build_embed())
 
     @discord.ui.button(label="Apply", style=discord.ButtonStyle.green, row=1)
@@ -356,4 +356,4 @@ class EmbedBuilderView(discord.ui.View):
         await self.response.delete()
         self.stop()
 
-        
+

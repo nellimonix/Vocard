@@ -35,7 +35,7 @@ from ..language import LangHandler
 #         super().__init__(
 #             placeholder="Select A Lyrics Translation",
 #             min_values=1, max_values=1,
-#             options=[discord.SelectOption(label=lang) for lang in langs], 
+#             options=[discord.SelectOption(label=lang) for lang in langs],
 #             custom_id="selectLyricsLangs"
 #         )
 
@@ -50,7 +50,7 @@ class LyricsView(PaginationView):
         self.name: str = name
         self.author: discord.Member = author
         self.response: discord.Message = None
-        
+
         super().__init__(
             Pagination[str](source.get("default"), page_size=1),
             author
@@ -70,7 +70,7 @@ class LyricsView(PaginationView):
         embed=discord.Embed(description=page[0], color=Config().embed_color)
         embed.set_author(name=text.format(self.name), icon_url=self.author.display_avatar.url)
         return embed
-    
+
     async def update_message(self, interaction: discord.Interaction) -> None:
         """Update the view and edit the message."""
         self.update_view()

@@ -46,7 +46,7 @@ class Config:
         """
         Singleton pattern to ensure only one instance of Config exists.
         If settings are provided, creates a new instance that replaces the old one.
-        
+
         Args:
             settings (Dict[str, Any], optional): A dictionary containing configuration settings. Defaults to None.
                                                If provided, creates a new instance that replaces the old one.
@@ -56,35 +56,35 @@ class Config:
             instance.__init__(settings)
             cls._instance = instance
             return instance
-            
+
         if cls._instance is None:
             cls._instance = super(Config, cls).__new__(cls)
-            
+
         return cls._instance
 
     def __init__(self, settings: Dict[str, Any] = None) -> None:
         """
-        Initialize configuration settings. 
-        
+        Initialize configuration settings.
+
         Args:
             settings (Dict[str, Any], optional): A dictionary containing configuration settings.
                                                If None, uses empty dict with default values.
         """
         if hasattr(self, 'initialized'):
             return
-            
+
         settings = settings or {}
-        
+
         self.token: str = settings.get("token") or os.getenv("TOKEN")
-        self.client_id: int = int(settings.get("client_id", 0)) or int(os.getenv("CLIENT_ID"))
+        self.client_id: int = int(settings.get("client_id", 0)) or int(os.getenv("CLIENT_ID", "0"))
         self.genius_token: str = settings.get("genius_token") or os.getenv("GENIUS_TOKEN")
         self.mongodb_url: str = settings.get("mongodb_url") or os.getenv("MONGODB_URL")
         self.mongodb_name: str = settings.get("mongodb_name") or os.getenv("MONGODB_NAME")
-        
-        self.invite_link: str = "https://discord.gg/wRCgB7vBQv"
+
+        self.invite_link: str = settings.get("INVITE_LINK") or settings.get("invite_link") or os.getenv("INVITE_LINK", "")
         self.nodes: Dict[str, Dict[str, Union[str, int, bool]]] = settings.get("nodes", {})
         self.max_queue: int = settings.get("default_max_queue", 1000)
-        self.search_platform: SearchType = SearchType.from_platform(settings.get("default_search_platform", "youtube")) or SearchType.YOUTUBE
+        self.search_platform: SearchType = SearchType.from_platform(settings.get("default_search_platform", "yandexmusic")) or SearchType.YANDEX_MUSIC
         self.bot_prefix: str = settings.get("prefix", "")
         self.activity: List[Dict[str, str]] = settings.get("activity", [{"listen": "/help"}])
         self.logging: Dict[Union[str, Dict[str, Union[str, bool]]]] = settings.get("logging", {})
@@ -100,38 +100,38 @@ class Config:
         self.playlist_settings: Dict[str, Union[str, int]] = settings.get("playlist_settings", {})
         self.timer_settings: Dict[str, int] = settings.get("timer_settings", {})
         self.version: str = settings.get("version", "")
-        
+
         self.initialized = True
-    
+
     @classmethod
     def get_source_config(cls, source: str, type: str) -> Union[str, None]:
         """
         Get source configuration for a specific source and type.
-        
+
         Args:
             source (str): The source identifier (e.g., 'youtube', 'spotify').
                             Case-insensitive and spaces are removed.
             type (str): The type of configuration to retrieve (e.g., 'emoji', 'color').
-        
+
         Returns:
             Union[str, None]: The configuration value for the specified source and type.
                             Returns None if either the source or type doesn't exist.
-        
+
         Example:
             >>> Config().get_source("youtube", "emoji")
             "🎵"
         """
         if not isinstance(source, str) or not isinstance(type, str):
             return None
-            
+
         normalized_source: str = source.lower().strip().replace(" ", "")
         source_settings: dict[str, str] = cls._instance.sources_settings.get(
             normalized_source,
             cls._instance.sources_settings.get("others", {})
         )
-        
+
         return source_settings.get(type)
-    
+
     @classmethod
     def get_playlist_config(cls) -> tuple[int, int, str]:
         config = cls._instance.playlist_settings
