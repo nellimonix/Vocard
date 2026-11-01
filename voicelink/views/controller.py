@@ -166,7 +166,7 @@ class PlayPause(ControlButton):
             else:
                 votes.add(interaction.user)
                 if len(votes) < (required := self.player.required()):
-                    return await self.send(interaction, f"{vote_type}Vote", interaction.user, len(votes), required)
+                    return await self.send(interaction, f"player.controls.{vote_type}.vote", interaction.user, len(votes), required)
 
         self.change_states(self.playing_status(self.player))
         await self.player.set_pause(is_paused, interaction.user)

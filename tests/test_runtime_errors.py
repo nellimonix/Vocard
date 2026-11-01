@@ -55,6 +55,15 @@ class RuntimeErrorTests(unittest.IsolatedAsyncioTestCase):
         player.set_pause.assert_awaited_once_with(True, interaction.user)
         interaction.edit_original_response.assert_awaited_once_with(view=None)
 
+    async def test_pause_button_votes_use_existing_localizations(self):
+        for paused, action in [(False, "pause"), (True, "resume")]:
+            player = SimpleNamespace(is_paused=paused, current=Mock(), is_privileged=Mock(return_value=False), required=Mock(return_value=3), pause_votes=set(), resume_votes=set(), settings={})
+            button = PlayPause(player=player, btn_data={})
+            interaction = SimpleNamespace(user=Mock())
+            with patch("voicelink.views.controller.send_localized_message", new=AsyncMock()) as send:
+                await button.callback(interaction)
+            self.assertEqual(send.await_args.args[1], f"player.controls.{action}.vote")
+
     async def test_stale_controller_handles_message_disappearing(self):
         player = SimpleNamespace(channel=None)
         with patch.object(Config(), "controller", {"buttons": []}):
