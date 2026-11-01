@@ -29,16 +29,17 @@ import zipfile
 import shutil
 import subprocess
 from io import BytesIO
+from pathlib import Path
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 __version__ = "v2.7.3"
 
 # URLs for update and migration
 PYTHON_CMD_NAME = os.path.basename(sys.executable)
-GITHUB_API_URL = "https://api.github.com/repos/ChocoMeow/Vocard/releases/latest"
-VOCARD_URL = "https://github.com/ChocoMeow/Vocard/archive/"
+GITHUB_API_URL = "https://api.github.com/repos/nellimonix/Vocard/releases/latest"
+VOCARD_URL = "https://github.com/nellimonix/Vocard/archive/"
 MIGRATION_SCRIPT_URL = f"https://raw.githubusercontent.com/ChocoMeow/Vocard-Magration/main/{__version__}.py"
-IGNORE_FILES = ["settings.json", "logs", "last-session.json"]
+IGNORE_FILES = ["settings.json", "logs", "last-session.json", ".git", ".env", ".venv", "data", "lavalink", "PENDING_PRODUCTION.md"]
 
 class bcolors:
     WARNING = '\033[93m'
@@ -102,24 +103,34 @@ def install(response, version):
     if user_input.lower() in ["y", "yes"]:
         print("Installing ...")
         zfile = zipfile.ZipFile(BytesIO(response.content))
+        root = Path(ROOT_DIR).resolve()
+        for member in zfile.infolist():
+            (root / member.filename).resolve().relative_to(root)
         zfile.extractall(ROOT_DIR)
 
         # Remove 'v' from the version string for folder name.
         version_without_v = version.replace("v", "")
         source_dir = os.path.join(ROOT_DIR, f"Vocard-{version_without_v}")
+        source_path = Path(source_dir).resolve()
+        source_path.relative_to(root)
+        if source_path == root:
+            raise ValueError()
         if os.path.exists(source_dir):
             for filename in os.listdir(ROOT_DIR):
                 if filename in IGNORE_FILES + [f"Vocard-{version_without_v}"]:
                     continue
 
                 filename_path = os.path.join(ROOT_DIR, filename)
+                Path(filename_path).resolve().relative_to(root)
                 if os.path.isdir(filename_path):
                     shutil.rmtree(filename_path)
                 else:
                     os.remove(filename_path)
             for filename in os.listdir(source_dir):
+                if filename in IGNORE_FILES:
+                    continue
                 shutil.move(os.path.join(source_dir, filename), os.path.join(ROOT_DIR, filename))
-            os.rmdir(source_dir)
+            shutil.rmtree(source_dir)
         print(f"{bcolors.OKGREEN}Version {version} installed Successfully! Run `{PYTHON_CMD_NAME} main.py` to start your bot{bcolors.ENDC}")
     else:
         print("Update canceled!")
