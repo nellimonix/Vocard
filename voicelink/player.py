@@ -58,6 +58,7 @@ from .mongodb import MongoDBHandler
 from .language import LangHandler
 from .views import InteractiveController
 from .utils import format_ms, dispatch_message
+from .voice_status import VoiceStatusUpdater
 
 if TYPE_CHECKING:
     from .ipc import IPCClient
@@ -159,6 +160,7 @@ class Player(VoiceProtocol):
 
         self._ph = PlayerPlaceholder(client, self)
         self._logger: Optional[logging.Logger] = self._node._logger
+        self._voice_status_updater = VoiceStatusUpdater(self._logger)
         self._inactive_cleanup_task: Optional[asyncio.Task[None]] = None
 
     def __repr__(self):
@@ -588,6 +590,7 @@ class Player(VoiceProtocol):
         """Disconnects the player from voice."""
         self._closing = True
         self._stop_controller_view()
+        await self._voice_status_updater.close()
         try:
             await self.guild.change_voice_state(channel=None)
         finally:
@@ -922,20 +925,18 @@ class Player(VoiceProtocol):
         return False
 
     async def update_voice_status(self, remove_status: bool = False) -> None:
-        """Updates the voice status of the channel based on the specified template."""
+        updater = self._voice_status_updater
+        if remove_status:
+            await updater.close()
+            return
         template = self.settings.get("stage_announce_template", Config().voice_status_template)
-        if not template or not self.channel:
+        if not template or not self.channel or self._closing or self.channel.type != ChannelType.voice:
             return
 
         try:
             rv = {key: func() if callable(func) else func for key, func in self._ph.variables.items()}
-            status = None if remove_status else self._ph.replace(text=template, variables=rv)
-            # if self.channel.status != status:
-            if self.channel.type == ChannelType.voice:
-                await self.channel.edit(status=status)
-
-        except (errors.Forbidden, errors.NotFound):
-            return
+            status = self._ph.replace(text=template, variables=rv)
+            updater.update(self.channel, status)
 
         except Exception as e:
             self._logger.error(

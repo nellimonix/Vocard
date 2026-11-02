@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import time, re
+import time
 
 from typing import List, Dict, Union, Optional, TYPE_CHECKING
 
@@ -8,6 +8,7 @@ from discord import User, Member
 from discord.ext import commands
 from voicelink import Player, Track, Playlist, NodePool, LoopType, Filters, Config, MongoDBHandler, LangHandler, LYRICS_PLATFORMS
 from voicelink.utils import TempCtx
+from voicelink.lyrics import split_lyrics
 
 if TYPE_CHECKING:
     from .client import IPCClient
@@ -670,7 +671,7 @@ async def getLyrics(bot: commands.Bot, data: Dict) -> Dict:
             "title": title,
             "artist": artist,
             "platform": platform,
-            "lyrics": {_: re.findall(r'.*\n(?:.*\n){,22}', v or "") for _, v in lyrics.items()} if lyrics else {},
+            "lyrics": {key: pages for key, text in (lyrics or {}).items() if (pages := split_lyrics(text))},
             "callback": data.get("callback")
         }
 

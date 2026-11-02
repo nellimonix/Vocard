@@ -22,7 +22,6 @@ SOFTWARE.
 """
 
 import discord
-import re
 import voicelink
 
 from discord.ext import commands
@@ -32,6 +31,7 @@ from ..config import Config
 from ..utils import format_ms, send_localized_message, dispatch_message
 from ..language import LangHandler
 from ..mongodb import MongoDBHandler
+from ..lyrics import split_lyrics
 
 def key(interaction: discord.Interaction):
     return interaction.user
@@ -389,10 +389,11 @@ class Lyrics(ControlButton):
         lyrics_platform = voicelink.LYRICS_PLATFORMS.get(Config().lyrics_platform)
         if lyrics_platform:
             lyrics = await lyrics_platform().get_lyrics(title, artist)
-            if not lyrics:
+            source = {key: pages for key, text in (lyrics or {}).items() if (pages := split_lyrics(text))}
+            if not source:
                 return await self.send(interaction, "lyrics.notFound", ephemeral=True)
 
-            view = LyricsView(name=title, source={_: re.findall(r'.*\n(?:.*\n){,22}', v or "") for _, v in lyrics.items()}, author=interaction.user)
+            view = LyricsView(name=title, source=source, author=interaction.user)
             view.response = await self.send_embed(interaction, await view.build_embed(), view=view, ephemeral=True)
 
 class Tracks(ControlSelect):

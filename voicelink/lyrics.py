@@ -80,6 +80,28 @@ Mozilla/5.0 (Macintosh; U; Intel Mac OS X 10_5_6; en-US) AppleWebKit/530.9 (KHTM
 Mozilla/5.0 (Macintosh; U; Intel Mac OS X 10_5_6; en-US) AppleWebKit/530.6 (KHTML, like Gecko) Chrome/ Safari/530.6
 Mozilla/5.0 (Macintosh; U; Intel Mac OS X 10_5_6; en-US) AppleWebKit/530.5 (KHTML, like Gecko) Chrome/ Safari/530.5'''
 
+
+def split_lyrics(text: str) -> list[str]:
+    if not isinstance(text, str) or not text.strip():
+        return []
+    pages = []
+    page = ""
+    line_count = 0
+    for line in text.splitlines(keepends=True):
+        while line:
+            if line_count >= 23 or len(page) >= 4096:
+                if page.strip():
+                    pages.append(page)
+                page, line_count = "", 0
+            available = 4096 - len(page)
+            page += line[:available]
+            line = line[available:]
+            if not line:
+                line_count += 1
+    if page.strip():
+        pages.append(page)
+    return pages
+
 class LyricsPlatform(ABC):
     @abstractmethod
     async def get_lyrics(self, title: str, artist: str) -> Optional[dict[str, str]]:

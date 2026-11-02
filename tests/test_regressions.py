@@ -15,6 +15,7 @@ from voicelink.enums import RequestMethod
 from voicelink.cache import BoundedTTLCache
 from voicelink.player import connect_channel
 from voicelink.utils import dispatch_message
+from voicelink.voice_status import VoiceStatusUpdater
 
 TEST_CONFIG = {"client_id": 1, "prefix": "!", "logging": {"file": {"enable": False}}, "ipc_client": {"enable": False}}
 Config(TEST_CONFIG)
@@ -103,9 +104,13 @@ class VoiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_voice_status_permission_errors_are_nonfatal(self):
         response = SimpleNamespace(status=403, reason="Forbidden")
-        channel = SimpleNamespace(type=discord.ChannelType.voice, edit=AsyncMock(side_effect=discord.Forbidden(response, {"code": 50013, "message": "Missing Permissions"})))
+        channel = SimpleNamespace(id=42, type=discord.ChannelType.voice, edit=AsyncMock(side_effect=discord.Forbidden(response, {"code": 50013, "message": "Missing Permissions"})))
         player = SimpleNamespace(channel=channel, settings={"stage_announce_template": "Playing"}, _ph=SimpleNamespace(variables={}, replace=Mock(return_value="Playing")), _logger=Mock())
+        player._closing = False
+        player._voice_status_updater = VoiceStatusUpdater(player._logger)
         await Player.update_voice_status(player)
+        await player._voice_status_updater._task
+        await player._voice_status_updater.close()
         player._logger.error.assert_not_called()
 
     async def test_deleted_controller_is_recreated(self):

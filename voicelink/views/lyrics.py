@@ -52,7 +52,7 @@ class LyricsView(PaginationView):
         self.response: discord.Message = None
 
         super().__init__(
-            Pagination[str](source.get("default"), page_size=1),
+            Pagination[str](source.get("default") or next((pages for pages in source.values() if pages), []), page_size=1),
             author
         )
 
@@ -67,7 +67,8 @@ class LyricsView(PaginationView):
     async def build_embed(self) -> discord.Embed:
         page = self.pagination.get_current_page_items()
         text = await LangHandler.get_lang(self.author.guild.id, "search.title")
-        embed=discord.Embed(description=page[0], color=Config().embed_color)
+        description = page[0] if page else await LangHandler.get_lang(self.author.guild.id, "lyrics.notFound")
+        embed=discord.Embed(description=description, color=Config().embed_color)
         embed.set_author(name=text.format(self.name), icon_url=self.author.display_avatar.url)
         return embed
 
