@@ -327,6 +327,54 @@ class ControllerLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.store._views, {})
         self.assertFalse(player._updating)
 
+    async def test_deleted_channel_retries_after_cooldown_and_recovers(self):
+        player = ControllerPlayer()
+        error = discord.NotFound(SimpleNamespace(status=404, reason="Not Found"), {"code": 10003})
+        with patch("voicelink.player.time.monotonic", return_value=1000) as now:
+            with patch("voicelink.player.dispatch_message", new=AsyncMock(side_effect=error)) as send:
+                await player.invoke_controller()
+                for _ in range(100):
+                    await player.invoke_controller()
+                send.assert_awaited_once()
+                self.assertEqual(self.store._views, {})
+                self.assertFalse(player._updating)
+            now.return_value = 1300
+            await player.invoke_controller()
+            self.assertIsNotNone(player.controller)
+            self.assertEqual(player._controller_retry_at, 0)
+            self.assertEqual(len(self.store._views), 1)
+
+    async def test_permission_failure_does_not_repeat_edits_during_cooldown(self):
+        player = ControllerPlayer()
+        await player.invoke_controller()
+        error = discord.Forbidden(SimpleNamespace(status=403, reason="Forbidden"), {"code": 50013})
+        player.controller.before_edit = AsyncMock(side_effect=error)
+        with patch("voicelink.player.time.monotonic", return_value=1000):
+            await player.invoke_controller()
+            for _ in range(100):
+                await player.invoke_controller()
+        player.controller.before_edit.assert_awaited_once()
+        self.assertEqual(self.store._views, {})
+
+    async def test_new_channel_bypasses_previous_channel_cooldown(self):
+        player = ControllerPlayer()
+        error = discord.NotFound(SimpleNamespace(status=404, reason="Not Found"), {"code": 10003})
+        with patch("voicelink.player.time.monotonic", return_value=1000):
+            with patch("voicelink.player.dispatch_message", new=AsyncMock(side_effect=error)):
+                await player.invoke_controller()
+            player.context = SimpleNamespace(channel=SimpleNamespace(id=43))
+            await player.invoke_controller()
+        self.assertIsNotNone(player.controller)
+        self.assertEqual(player._controller_retry_at, 0)
+
+    async def test_cancelled_refresh_does_not_delay_retry(self):
+        player = ControllerPlayer()
+        with patch("voicelink.player.dispatch_message", new=AsyncMock(side_effect=asyncio.CancelledError)):
+            with self.assertRaises(asyncio.CancelledError):
+                await player.invoke_controller()
+        await player.invoke_controller()
+        self.assertIsNotNone(player.controller)
+
     async def test_stale_controller_is_disabled_without_channel_access(self):
         player = ControllerPlayer()
         view = InteractiveController(player)

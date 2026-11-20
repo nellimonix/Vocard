@@ -148,6 +148,8 @@ class Player(VoiceProtocol):
 
         self.controller: Union[Message, PartialMessage] = None
         self._controller_view: Optional[InteractiveController] = None
+        self._controller_retry_at: float = 0.0
+        self._controller_retry_channel = None
         self._closing = False
         self._updating: bool = False
 
@@ -466,6 +468,11 @@ class Player(VoiceProtocol):
         if getattr(self, "_closing", False) or not self.settings.get('controller', True) or self._updating or not self.channel:
             return
 
+        target = (self.context.channel.id, self.settings.get("music_request_channel", {}).get("text_channel_id"))
+        if target == getattr(self, "_controller_retry_channel", None) and time.monotonic() < getattr(self, "_controller_retry_at", 0.0):
+            return
+
+        self._controller_retry_channel = target
         self._updating = True
         view = None
 
@@ -501,11 +508,14 @@ class Player(VoiceProtocol):
 
             if not self._closing:
                 self._controller_view = view
+            self._controller_retry_at = 0.0
 
         except errors.Forbidden:
+            self._controller_retry_at = time.monotonic() + 300
             self._logger.warning(f"Missing permission to update the music controller on {self.guild.name}({self.guild.id})")
 
         except Exception as e:
+            self._controller_retry_at = time.monotonic() + 300
             self._logger.error(f"Something went wrong while sending music controller to {self.guild.name}({self.guild.id})", exc_info=e)
 
         finally:
