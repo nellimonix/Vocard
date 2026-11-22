@@ -1,0 +1,11 @@
+[Unit]
+Description=YaMusicBot backup health
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/yamusicbot-backup/service.env
+ExecStart=/bin/sh /root/project/YaMusicBot/backup/healthcheck.sh
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+PrivateTmp=yes

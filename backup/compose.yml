@@ -1,0 +1,25 @@
+name: yamusicbot-backup
+services:
+  backup:
+    image: ${BACKUP_IMAGE:-yamusicbot-backup:local}
+    build:
+      context: .
+    network_mode: bridge
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 512m
+    cpus: 1.0
+    environment:
+      TZ: Europe/Moscow
+    volumes:
+      - ${BACKUP_STATE:-/var/lib/yamusicbot-backup}:/state
+      - ${BACKUP_SECRETS:-/etc/yamusicbot-backup}:/secrets:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"

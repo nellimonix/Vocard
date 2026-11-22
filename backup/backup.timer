@@ -1,0 +1,11 @@
+[Unit]
+Description=Hourly YaMusicBot backup
+
+[Timer]
+OnCalendar=*-*-* *:00:00 Europe/Moscow
+Persistent=true
+AccuracySec=1s
+Unit=backup.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,23 @@
+[Unit]
+Description=YaMusicBot backup
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/yamusicbot-backup/service.env
+ExecStart=/bin/sh /root/project/YaMusicBot/backup/backup.sh
+ExecStopPost=/usr/bin/python3 /root/project/YaMusicBot/backup/snapshot.py cleanup
+TimeoutStartSec=30min
+TimeoutStopSec=60
+KillMode=control-group
+UMask=0077
+StateDirectory=yamusicbot-backup
+StateDirectoryMode=0700
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/yamusicbot-backup
+StandardOutput=journal
+StandardError=journal

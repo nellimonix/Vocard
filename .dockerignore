@@ -7,3 +7,5 @@ data
 settings.json
 lavalink/token.txt
 PENDING_PRODUCTION.md
+.test-data
+DEPLOYMENT_LOG.jsonl

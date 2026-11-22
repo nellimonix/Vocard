@@ -1,0 +1,10 @@
+[Unit]
+Description=YaMusicBot backup health schedule
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+Unit=backup-health.service
+
+[Install]
+WantedBy=timers.target
