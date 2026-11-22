@@ -3,13 +3,20 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import shutil
 import stat
+import subprocess
 import sys
 import tarfile
 import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
+
+try:
+    import py7zr
+except ImportError:
+    py7zr = None
 
 
 def load(name, path, substitutes):
@@ -20,19 +27,21 @@ def load(name, path, substitutes):
     return module
 
 
-worker = load('backup_worker', 'backup/worker.py', {'paramiko': Mock()})
+worker = load('backup_worker', 'backup/worker.py',
+              {'paramiko': Mock(), **({'py7zr': Mock(), 'backports': Mock(),
+                                      'backports.zstd': Mock()} if py7zr is None else {})})
 snapshot = load('backup_snapshot', 'backup/snapshot.py', {'fcntl': Mock()})
 
 
 class BackupTests(unittest.TestCase):
     def test_moscow_hour_path(self):
         stamp = dt.datetime(2026, 11, 22, 22, 42, tzinfo=dt.timezone.utc)
-        self.assertEqual(worker.slot(stamp), '2026-11-23/01:00.tar.zst.age')
+        self.assertEqual(worker.slot(stamp), '2026-11-23/01-00.7z')
 
     def test_retention_only_removes_expired_hourly_archives(self):
         directories = ['2026-10-23', '2026-10-22', '2026-11-22', 'other', '.ssh']
         entries = {
-            '2026-10-23': ['11:00.tar.zst.age', '12:00.tar.zst.age', 'unknown.txt'],
+            '2026-10-23': ['10-00.7z', '11:00.tar.zst.age', '12:00.tar.zst.age', '12-00.7z', 'unknown.txt'],
             '2026-10-22': ['12:00.tar.zst.age'],
             '2026-11-22': ['12:00.tar.zst.age', '12:00.tar.zst.age.partial'],
         }
@@ -44,7 +53,7 @@ class BackupTests(unittest.TestCase):
         sftp.listdir.side_effect = lambda day: ['unknown.txt'] if day == '2026-10-23' else []
         worker.prune(sftp, dt.datetime(2026, 11, 22, 12, tzinfo=worker.MOSCOW))
         self.assertEqual([c.args[0] for c in sftp.remove.call_args_list],
-                         ['2026-10-22/12:00.tar.zst.age', '2026-10-23/11:00.tar.zst.age'])
+                         ['2026-10-22/12:00.tar.zst.age', '2026-10-23/10-00.7z', '2026-10-23/11:00.tar.zst.age'])
         sftp.rmdir.assert_called_once_with('2026-10-22')
 
     def test_symlinked_remote_date_is_never_traversed(self):
@@ -73,6 +82,50 @@ class BackupTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'unsafe'):
                 worker.safe_extract(source, Path(directory) / 'target')
             self.assertFalse((Path(directory) / 'escaped').exists())
+
+    @unittest.skipIf(py7zr is None or shutil.which('7zz') is None, '7z dependencies are available in the backup image')
+    def test_encrypted_7z_roundtrip_includes_nested_manifest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / 'source'
+            source.mkdir()
+            (source / 'project').mkdir()
+            (source / 'project' / 'manifest.json').write_text('private data')
+            (source / 'mongo.archive').write_bytes(b'mongodb-backup-fixture' * 100000)
+            manifest = {'project/manifest.json': worker.file_hash(source / 'project' / 'manifest.json')}
+            manifest['mongo.archive'] = worker.file_hash(source / 'mongo.archive')
+            (source / 'manifest.json').write_text(json.dumps(manifest))
+            archive = root / 'archive.7z'
+            password = 'test-password-not-a-secret'
+            worker.create_archive(source, archive, password)
+            self.assertEqual(archive.read_bytes()[:6], b'7z\xbc\xaf\x27\x1c')
+            self.assertNotIn(b'private data', archive.read_bytes())
+            with self.assertRaises(worker.py7zr.exceptions.PasswordRequired):
+                worker.py7zr.SevenZipFile(archive, 'r')
+            native = shutil.which('7zz')
+            if native:
+                result = subprocess.run([native, 't', str(archive), '-p' + password],
+                                        capture_output=True, timeout=60)
+                self.assertEqual(result.returncode, 0)
+            destination = root / 'restore'
+            destination.mkdir()
+            worker.extract_7z(archive, destination, password)
+            self.assertEqual((destination / 'project' / 'manifest.json').read_text(), 'private data')
+
+    @unittest.skipIf(py7zr is None or shutil.which('7zz') is None, '7z dependencies are available in the backup image')
+    def test_wrong_7z_password_does_not_extract_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / 'source'
+            source.mkdir()
+            (source / 'manifest.json').write_text('{}')
+            archive = root / 'archive.7z'
+            worker.create_archive(source, archive, 'correct-test-password')
+            destination = root / 'restore'
+            destination.mkdir()
+            with self.assertRaises(Exception):
+                worker.extract_7z(archive, destination, 'incorrect-test-password')
+            self.assertEqual(list(destination.iterdir()), [])
 
     def test_restore_checks_file_manifest(self):
         with tempfile.TemporaryDirectory() as directory:
