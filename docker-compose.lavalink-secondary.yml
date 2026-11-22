@@ -1,0 +1,35 @@
+name: vocard-lavalink-secondary
+services:
+    lavalink-secondary:
+        image: ${LAVALINK_SECONDARY_IMAGE:-vocard-lavalink}
+        pull_policy: never
+        restart: unless-stopped
+        environment:
+            _JAVA_OPTIONS: -Xmx1G -Djava.net.preferIPv4Stack=true
+            SERVER_PORT: "2333"
+            SPRING_CONFIG_ADDITIONAL_LOCATION: file:/opt/Lavalink/application.secondary.yml
+        volumes:
+            - type: bind
+              source: ./lavalink/application.yml
+              target: /opt/Lavalink/application.yml
+              read_only: true
+              bind:
+                  create_host_path: false
+            - type: bind
+              source: ./data/lavalink-secondary/application.yml
+              target: /opt/Lavalink/application.secondary.yml
+              read_only: true
+              bind:
+                  create_host_path: false
+        networks:
+            - vocard
+        healthcheck:
+            test: ["CMD", "nc", "-z", "localhost", "2333"]
+            interval: 10s
+            timeout: 5s
+            retries: 5
+
+networks:
+    vocard:
+        name: vocard
+        external: true
