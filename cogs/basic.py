@@ -40,6 +40,35 @@ from voicelink import MongoDBHandler, LangHandler, Config
 from voicelink.views import SearchView, QueueView, LinkView, LyricsView, HelpView
 from voicelink.utils import format_ms, format_to_ms, truncate_string, dispatch_message, send_localized_message
 
+async def enqueue_search(ctx, player, query, requester, *, start="0", end="0", limit=None, offset=0, ephemeral=False):
+    found = await player.get_tracks(query, requester=requester)
+    playlist = found if isinstance(found, voicelink.Playlist) else None
+    tracks = playlist.tracks if playlist is not None else found
+    end_index = None if playlist is not None and limit is None else offset + (limit or 1)
+    selection = tracks[offset:end_index] if tracks else []
+    if not selection:
+        return await send_localized_message(ctx, "player.errors.noTrackFound", ephemeral=ephemeral)
+
+    try:
+        times = {"start_time": format_to_ms(start), "end_time": format_to_ms(end)}
+        if playlist is not None:
+            count = await player.add_track(selection, **times)
+            await send_localized_message(ctx, "player.playback.playlistLoad", playlist.name, count, ephemeral=ephemeral)
+        elif len(selection) > 1:
+            await player.add_track(selection, **times)
+            await send_localized_message(ctx, "search.success", ephemeral=ephemeral)
+        else:
+            track = selection[0]
+            position = await player.add_track(track, **times)
+            live, queued, added = await LangHandler.get_lang(ctx.guild.id, "common.status.live", "player.playback.trackLoadPos", "player.playback.trackLoad")
+            show_position = position >= 1 and player.is_playing
+            prefix = f"`{live}`" if track.is_stream else ""
+            await dispatch_message(ctx, prefix + (queued if show_position else added), track.title, track.uri, track.author,
+                                   track.formatted_length, position if show_position else None, ephemeral=ephemeral)
+    finally:
+        if not player.is_playing:
+            await player.do_next()
+
 async def nowplay(ctx: commands.Context, player: voicelink.Player):
     track = player.current
     if not track:
@@ -133,29 +162,7 @@ class Basic(commands.Cog):
         if ctx.interaction and not ctx.interaction.response.is_done():
             await ctx.interaction.response.defer()
 
-        tracks = await player.get_tracks(query, requester=ctx.author)
-        if not tracks:
-            return await send_localized_message(ctx, "player.errors.noTrackFound")
-
-        try:
-            if isinstance(tracks, voicelink.Playlist):
-                index = await player.add_track(tracks.tracks, start_time=format_to_ms(start), end_time=format_to_ms(end))
-                await send_localized_message(ctx, "player.playback.playlistLoad", tracks.name, index)
-            else:
-                position = await player.add_track(tracks[0], start_time=format_to_ms(start), end_time=format_to_ms(end))
-                texts = await LangHandler.get_lang(ctx.guild.id, "common.status.live", "player.playback.trackLoadPos", "player.playback.trackLoad")
-                stream_content = f"`{texts[0]}`" if tracks[0].is_stream else ""
-                additional_content = texts[1] if position >= 1 and player.is_playing else texts[2]
-
-                await dispatch_message(
-                    ctx,
-                    stream_content + additional_content,
-                    tracks[0].title, tracks[0].uri, tracks[0].author, tracks[0].formatted_length,
-                    position if position >= 1 and player.is_playing else None
-                )
-        finally:
-            if not player.is_playing:
-                await player.do_next()
+        await enqueue_search(ctx, player, query, ctx.author, start=start, end=end)
 
     @commands.dynamic_cooldown(cooldown_check, commands.BucketType.guild)
     async def _play(self, interaction: discord.Interaction, message: discord.Message):

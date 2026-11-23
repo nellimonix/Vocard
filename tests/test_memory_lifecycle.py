@@ -272,6 +272,25 @@ class ControllerLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(old_view())
         self.assertEqual(len(self.store._views), 1)
 
+    async def test_queue_end_edits_the_original_compact_message(self):
+        from voicelink.views.compact_controller import CompactQueueEnd
+
+        player = ControllerPlayer()
+        player._bot = SimpleNamespace(compact_controller=True, compact_app_emojis={})
+        player.bot = player._bot
+        player._ph = SimpleNamespace(replace=lambda text, _: text)
+        player.queue = SimpleNamespace(is_empty=True, history=lambda **_: [object()])
+        player.inactive_cleanup_at = 1795408167
+        player.is_position_fresh.return_value = False
+        original = StoredMessage(self.client, self.next_id)
+        player.controller = original
+
+        await player.invoke_controller()
+
+        self.assertIs(player.controller, original)
+        self.assertIsInstance(player._controller_view, CompactQueueEnd)
+        player.is_position_fresh.assert_not_awaited()
+
     async def test_teardown_releases_players_even_after_message_deletion(self):
         players = []
         for _ in range(100):

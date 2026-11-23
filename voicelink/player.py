@@ -67,7 +67,7 @@ from .queue import Queue, QUEUE_TYPES
 from .mongodb import MongoDBHandler
 from .language import LangHandler
 from .views import InteractiveController
-from .views.compact_controller import CompactController, CompactIdle
+from .views.compact_controller import CompactController, CompactIdle, CompactQueueEnd
 from .utils import format_ms, dispatch_message
 from .voice_status import VoiceStatusUpdater
 
@@ -192,6 +192,7 @@ class Player(VoiceProtocol):
         self._logger: Optional[logging.Logger] = self._node._logger
         self._voice_status_updater = VoiceStatusUpdater(self._logger)
         self._inactive_cleanup_task: Optional[asyncio.Task[None]] = None
+        self.inactive_cleanup_at: Optional[int] = None
 
     def __repr__(self):
         return (
@@ -589,7 +590,7 @@ class Player(VoiceProtocol):
                 return
             embed = self.build_embed(self.current)
             if getattr(getattr(self, "_bot", None), "compact_controller", False):
-                view = CompactController(self, embed)
+                view = CompactQueueEnd(self) if self.current is None and self.queue.is_empty else CompactController(self, embed)
                 content = None
                 edit = {"content": None, "embed": None, "attachments": [], "view": view}
             else:
@@ -610,7 +611,7 @@ class Player(VoiceProtocol):
                 if not self.controller:
                     self.controller = await dispatch_message(self.context, content=content, view=view, delete_after=None, requires_fetch=True)
 
-            elif not await self.is_position_fresh():
+            elif not isinstance(view, CompactQueueEnd) and not await self.is_position_fresh():
                 try:
                     await self.controller.delete()
                 except errors.NotFound:
@@ -749,6 +750,7 @@ class Player(VoiceProtocol):
                 self._current = track
             raise
         self.queue.clear()
+        self._schedule_inactive_cleanup_timer()
         await self.invoke_controller()
         await self.update_voice_status()
 
@@ -870,11 +872,13 @@ class Player(VoiceProtocol):
         if task and not task.done():
             task.cancel()
         self._inactive_cleanup_task = None
+        self.inactive_cleanup_at = None
 
     def _schedule_inactive_cleanup_timer(self) -> None:
         """Schedules per-player cleanup after inactivity."""
         self._cancel_inactive_cleanup_timer()
         seconds = Config().timer_settings.get("inactive_player_cleanup", 600)
+        self.inactive_cleanup_at = int(time.time() + seconds)
         self._inactive_cleanup_task = self.bot.loop.create_task(
             self._inactive_cleanup_timer_worker(seconds)
         )
@@ -1172,6 +1176,7 @@ class Player(VoiceProtocol):
                 return
 
             self._inactive_cleanup_task = None
+            self.inactive_cleanup_at = None
 
             if self.settings.get("24/7", False):
                 if not self.is_paused:

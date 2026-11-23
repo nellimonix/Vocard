@@ -33,6 +33,8 @@ from ..language import LangHandler
 from ..mongodb import MongoDBHandler
 from ..lyrics import split_lyrics
 
+ADD_TRACK_ID = "ym:compact:add"
+
 def key(interaction: discord.Interaction):
     return interaction.user
 
@@ -551,7 +553,8 @@ class ControllerInteractions:
                 pass
             return False
 
-        if not interaction.response.is_done():
+        custom_id = (getattr(interaction, "data", None) or {}).get("custom_id")
+        if custom_id != ADD_TRACK_ID and not interaction.response.is_done():
             await interaction.response.defer()
 
         if not self.player.node._available:

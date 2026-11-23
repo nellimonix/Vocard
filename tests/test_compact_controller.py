@@ -1,6 +1,6 @@
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, call
+from unittest.mock import AsyncMock, Mock, call, patch
 
 import _bootstrap
 import discord
@@ -8,7 +8,7 @@ from discord.http import handle_message_parameters
 
 from voicelink import Node, Player, SearchType
 from voicelink.enums import LoopType
-from voicelink.views.compact_controller import CompactController, CompactIdle, ICONS, READOUT_ICONS
+from voicelink.views.compact_controller import AddTrackModal, CompactController, CompactIdle, CompactQueueEnd, ICONS, READOUT_ICONS
 from voicelink.queue import LoopTypeCycle
 from voicelink.views.controller import Forward, Rewind, Stop, StopPlayback
 
@@ -18,7 +18,7 @@ def sample_player(*, custom=True):
     track = SimpleNamespace(title="Testing", author="Artist", uri="https://music.yandex.com/track/1",
                             thumbnail="https://avatars.yandex.net/image", source="yandexmusic",
                             requester=None, length=180000, is_stream=False, is_seekable=True, artist_url=None)
-    queue = SimpleNamespace(count=2, is_empty=False, history=lambda: [], _repeat=LoopTypeCycle())
+    queue = SimpleNamespace(count=2, is_empty=False, history=lambda **_: [], _repeat=LoopTypeCycle())
     return SimpleNamespace(bot=SimpleNamespace(compact_app_emojis=emoji_ids), current=track, position=90000,
                            is_paused=False, volume=100, queue=queue, get_msg=lambda key: key)
 
@@ -52,7 +52,7 @@ class CompactControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows[0][4]["style"], discord.ButtonStyle.secondary.value)
         self.assertEqual(rows[1][2]["style"], discord.ButtonStyle.secondary.value)
         self.assertEqual(rows[2][0]["style"], discord.ButtonStyle.success.value)
-        self.assertTrue(rows[2][0]["disabled"])
+        self.assertFalse(rows[2][0]["disabled"])
         self.assertEqual(rows[2][4]["style"], discord.ButtonStyle.danger.value)
         self.assertEqual(int(rows[1][4]["emoji"]["id"]), 1574295953220042752)
         self.assertIsInstance(view.frame.children[-1].children[-2], StopPlayback)
@@ -74,7 +74,7 @@ class CompactControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows[1].children[2].style, discord.ButtonStyle.primary)
         self.assertIn("▰▰▰▰▰▱▱▱▱▱", view.progress.content)
 
-    async def test_artist_url_from_loaded_playlist_is_shown_for_primary_artist(self):
+    async def test_artist_url_from_loaded_playlist_links_the_entire_artist_line(self):
         player = sample_player()
         payload = {
             "encoded": "track",
@@ -90,7 +90,60 @@ class CompactControllerTests(unittest.IsolatedAsyncioTestCase):
         view = CompactController(player, discord.Embed())
         header = list(view.frame.children[0].children)
         self.assertEqual(header[0].content, "-# Сейчас играет")
-        self.assertEqual(header[2].content, "[BOOKER](<https://music.yandex.ru/artist/4622993>), Крип-А-Крип")
+        self.assertEqual(header[2].content, "[BOOKER, Крип-А-Крип](<https://music.yandex.ru/artist/4622993>)")
+
+    async def test_queue_end_and_player_buttons_open_the_same_modal(self):
+        player = sample_player()
+        player.channel = object()
+        player.node = SimpleNamespace(_available=True)
+        player.is_user_join = Mock(return_value=True)
+        player._ph = SimpleNamespace(replace=lambda text, _: text)
+        player.settings = {}
+        player.inactive_cleanup_at = 1795408167
+        playing = CompactController(player, discord.Embed())
+        player.current = None
+        player.queue.is_empty = True
+        player.queue.history = lambda **_: [object()]
+        ended = CompactQueueEnd(player)
+        ended_payload = ended.to_components()[0]["components"]
+        self.assertIn("Очередь закончилась", ended_payload[0]["content"])
+        self.assertIn("<t:1795408167:R>", ended_payload[2]["content"])
+        buttons = ended_payload[3]["components"]
+        self.assertEqual([button["label"] for button in buttons], ["Добавить трек", "Предыдущий трек", "Выйти из канала"])
+        self.assertFalse(buttons[1]["disabled"])
+
+        for view, button in ((playing, playing.frame.children[-1].children[0]), (ended, ended.children[0].children[-1].children[0])):
+            response = SimpleNamespace(is_done=Mock(return_value=False), defer=AsyncMock(), send_modal=AsyncMock())
+            interaction = SimpleNamespace(user=Mock(id=1), data={"custom_id": button.custom_id}, response=response)
+            self.assertTrue(await view.interaction_check(interaction))
+            response.defer.assert_not_awaited()
+            await button.callback(interaction)
+            modal, = response.send_modal.await_args.args
+            self.assertIsInstance(modal, AddTrackModal)
+            self.assertEqual([item.text for item in modal.children], ["Запрос", "Количество", "Отступ"])
+
+    async def test_add_modal_submits_quantity_and_offset_and_refreshes_current_card(self):
+        player = sample_player()
+        player.accepts_tracks = True
+        player.is_user_join = Mock(return_value=True)
+        player.node = SimpleNamespace(_available=True)
+        player.is_playing = True
+        player.invoke_controller = AsyncMock()
+        tracks = [object() for _ in range(6)]
+        player.get_tracks = AsyncMock(return_value=tracks)
+        player.add_track = AsyncMock()
+        interaction = SimpleNamespace(guild=SimpleNamespace(voice_client=player), user=Mock(id=2),
+                                      response=SimpleNamespace(defer=AsyncMock()))
+        modal = AddTrackModal(player)
+        modal.query._value = "playlist"
+        modal.quantity._value = "3"
+        modal.offset._value = "2"
+        with patch("cogs.basic.send_localized_message", new_callable=AsyncMock):
+            await modal.on_submit(interaction)
+        interaction.response.defer.assert_awaited_once_with(ephemeral=True)
+        player.get_tracks.assert_awaited_once_with("playlist", requester=interaction.user)
+        player.add_track.assert_awaited_once_with(tracks[2:5], start_time=0, end_time=0)
+        player.invoke_controller.assert_awaited_once_with()
 
     async def test_repeat_color_follows_current_mode_and_compact_volume_changes_by_ten(self):
         player = sample_player()
@@ -221,6 +274,7 @@ class CompactControllerTests(unittest.IsolatedAsyncioTestCase):
 
         queue = SimpleNamespace(is_empty=False, clear=Mock())
         player = SimpleNamespace(current=object(), queue=queue, stop=AsyncMock(), invoke_controller=AsyncMock(),
+                                 _schedule_inactive_cleanup_timer=Mock(),
                                  update_voice_status=AsyncMock(), do_next=AsyncMock(), playback_stopped=False)
         await Player.stop_playback(player)
         player.stop.assert_awaited_once_with(unpause=True)

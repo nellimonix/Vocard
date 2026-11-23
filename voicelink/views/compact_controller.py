@@ -2,8 +2,10 @@ from urllib.parse import urlsplit
 
 import discord
 
-from ..utils import format_ms
-from .controller import BUTTON_TYPE, ControllerInteractions, StopPlayback
+from ..config import Config
+from ..exceptions import VoicelinkException
+from ..utils import dispatch_message, format_ms, send_localized_message
+from .controller import ADD_TRACK_ID, BUTTON_TYPE, Back, ControllerInteractions, Stop, StopPlayback
 
 
 ICON_ROWS = (
@@ -97,8 +99,7 @@ def _metadata(value):
 def _artist_text(track):
     author = _metadata(track.author)
     if author and (url := _https_url(track.artist_url)):
-        primary, separator, collaborators = author.partition(", ")
-        return f"[{primary}](<{url}>){separator}{collaborators}"
+        return f"[{author}](<{url}>)"
     return author
 
 
@@ -111,6 +112,76 @@ class CompactIdle(discord.ui.LayoutView):
         super().__init__(timeout=None)
         line = discord.ui.TextDisplay(_idle_text(embed, fallback))
         self.add_item(discord.ui.Container(line))
+
+
+class AddTrackModal(discord.ui.Modal):
+    def __init__(self, player):
+        super().__init__(title="Добавление в очередь")
+        self.player = player
+        self.query = discord.ui.TextInput(placeholder="Название трека или ссылка", max_length=1024)
+        self.quantity = discord.ui.TextInput(placeholder="100", required=False, max_length=5)
+        self.offset = discord.ui.TextInput(placeholder="0", required=False, max_length=5)
+        for text, field in (("Запрос", self.query), ("Количество", self.quantity), ("Отступ", self.offset)):
+            self.add_item(discord.ui.Label(text=text, component=field))
+
+    async def on_submit(self, interaction: discord.Interaction):
+        from cogs.basic import enqueue_search
+
+        player = self.player
+        if not player.accepts_tracks or interaction.guild.voice_client is not player:
+            return await send_localized_message(interaction, "player.errors.noPlayer", ephemeral=True)
+        if interaction.user.id not in Config().bot_access_user and not player.is_user_join(interaction.user):
+            return await send_localized_message(interaction, "voice.connection.notInChannel", interaction.user.mention,
+                                                player.channel.mention, ephemeral=True)
+        if not player.node._available:
+            return await send_localized_message(interaction, "player.errors.nodeReconnect", ephemeral=True)
+
+        query = self.query.value.strip()
+        quantity = self.quantity.value.strip()
+        offset = self.offset.value.strip()
+        if not query:
+            return await send_localized_message(interaction, "player.errors.noTrackFound", ephemeral=True)
+        if (quantity and (not quantity.isdecimal() or int(quantity) == 0)) or (offset and not offset.isdecimal()):
+            return await send_localized_message(interaction, "queue.errors.outOfList", ephemeral=True)
+
+        await interaction.response.defer(ephemeral=True)
+        was_playing = player.is_playing
+        try:
+            await enqueue_search(interaction, player, query, interaction.user, limit=int(quantity) if quantity else None,
+                                 offset=int(offset) if offset else 0, ephemeral=True)
+            if was_playing and player.is_playing:
+                await player.invoke_controller()
+        except VoicelinkException as error:
+            await dispatch_message(interaction, str(error), ephemeral=True)
+
+
+class OpenAddTrack(discord.ui.Button):
+    def __init__(self, player, *, label=None):
+        super().__init__(custom_id=ADD_TRACK_ID, emoji=compact_icon(player.bot, "add-track"), label=label,
+                         style=discord.ButtonStyle.success)
+        self.player = player
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(AddTrackModal(self.player))
+
+
+class CompactQueueEnd(ControllerInteractions, discord.ui.LayoutView):
+    def __init__(self, player):
+        super().__init__(timeout=None)
+        self.bind_player(player)
+        frame = discord.ui.Container(
+            discord.ui.TextDisplay("### Очередь закончилась"),
+            discord.ui.TextDisplay("Добавьте новый трек или включите предыдущий."),
+        )
+        if player.inactive_cleanup_at and not player.settings.get("24/7", False):
+            frame.add_item(discord.ui.TextDisplay(f"-# Если не добавить треки, бот выйдет <t:{player.inactive_cleanup_at}:R>."))
+
+        previous = Back(player=player, btn_data={"label": "Предыдущий трек", "emoji": compact_icon(player.bot, "back")})
+        previous.disabled = not player.queue.history(incTrack=True)
+        leave = Stop(player=player, btn_data={"label": "Выйти из канала", "emoji": compact_icon(player.bot, "leave"),
+                                              "style": "danger"})
+        frame.add_item(discord.ui.ActionRow(OpenAddTrack(player, label="Добавить трек"), previous, leave))
+        self.add_item(frame)
 
 
 class CompactController(ControllerInteractions, discord.ui.LayoutView):
@@ -161,8 +232,7 @@ class CompactController(ControllerInteractions, discord.ui.LayoutView):
                     row.add_item(self.volume_readout)
                     continue
                 if name == "add-track":
-                    row.add_item(discord.ui.Button(emoji=compact_icon(self.player.bot, name), disabled=True,
-                                                   style=discord.ButtonStyle.success))
+                    row.add_item(OpenAddTrack(self.player))
                     continue
                 button = StopPlayback if name == "stop" else BUTTON_TYPE[name]
                 item = button(player=self.player, btn_data=button_settings(self.player.bot, name), icon_only=True)
