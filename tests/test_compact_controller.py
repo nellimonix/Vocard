@@ -109,11 +109,13 @@ class CompactControllerTests(unittest.IsolatedAsyncioTestCase):
     async def test_exported_emoji_takes_priority_over_the_original_when_registered(self):
         player = sample_player()
         player.bot.compact_app_emojis["ym_forward_next30_x2"] = 1574295953220042753
+        player.bot.compact_app_emojis["ym_forward_next30_x15"] = 1574295953220042754
+        player.bot.compact_app_emojis["ym_pause_x15"] = 1574295953220042755
         view = CompactController(player, discord.Embed())
         rows = [item for item in view.frame.children if isinstance(item, discord.ui.ActionRow)]
-        self.assertEqual(rows[1].children[4].emoji.name, "ym_forward_next30_x2")
-        self.assertEqual(rows[1].children[4].emoji.id, 1574295953220042753)
-        self.assertEqual(rows[1].children[2].emoji.id, ICONS["pause"][1])
+        self.assertEqual(rows[1].children[4].emoji.name, "ym_forward_next30_x15")
+        self.assertEqual(rows[1].children[4].emoji.id, 1574295953220042754)
+        self.assertEqual(rows[1].children[2].emoji.id, 1574295953220042755)
 
     async def test_compact_seek_intervals_and_track_bounds(self):
         player = sample_player()
