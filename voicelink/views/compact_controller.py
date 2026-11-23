@@ -28,13 +28,37 @@ ICONS = {
     "stop": ("ym_stop_v2", 1574291241082953748, "⏹️"),
     "leave": ("ym_logout_v2", 1574291229980762162, "🚪"),
 }
+READOUT_ICONS = {
+    "ym_yamusic": 1374258185359196191,
+    "ym_start_100_v2": 1574308845839327282,
+    "ym_mid_100_v2": 1574308847638679592,
+    "ym_end_100_v2": 1574308849337376798,
+    "ym_start_0_v2": 1574308983395590296,
+    "ym_mid_0_v2": 1574308985421566013,
+    "ym_end_0_v2": 1574308987183046798,
+}
+PROGRESS_SEGMENTS = ("start", *("mid",) * 8, "end")
+
+
+def _application_icon(bot, name):
+    if registered := getattr(bot, "compact_app_emojis", {}).get(name):
+        return f"<:{name}:{registered}>"
+    return ""
 
 
 def compact_icon(bot, action):
     name, _, fallback = ICONS[action]
-    if registered := getattr(bot, "compact_app_emojis", {}).get(name):
-        return f"<:{name}:{registered}>"
-    return fallback
+    return _application_icon(bot, name) or fallback
+
+
+def _progress_bar(bot, elapsed, duration):
+    segments = len(PROGRESS_SEGMENTS)
+    filled = round(segments * elapsed / duration)
+    icons = [_application_icon(bot, f"ym_{segment}_{100 if index < filled else 0}_v2")
+             for index, segment in enumerate(PROGRESS_SEGMENTS)]
+    if all(icons):
+        return "".join(icons)
+    return "▰" * filled + "▱" * (segments - filled)
 
 
 def button_settings(bot, action):
@@ -72,14 +96,14 @@ class CompactIdle(discord.ui.LayoutView):
     def __init__(self, embed, fallback):
         super().__init__(timeout=None)
         line = discord.ui.TextDisplay(_idle_text(embed, fallback))
-        self.add_item(discord.ui.Container(line, accent_colour=embed.colour))
+        self.add_item(discord.ui.Container(line))
 
 
 class CompactController(ControllerInteractions, discord.ui.LayoutView):
     def __init__(self, player, embed):
         super().__init__(timeout=None)
         self.bind_player(player)
-        self.frame = discord.ui.Container(accent_colour=embed.colour)
+        self.frame = discord.ui.Container()
         self.add_item(self.frame)
         self._add_track_header(embed)
         self.readout = discord.ui.TextDisplay(self.readout_text())
@@ -128,20 +152,23 @@ class CompactController(ControllerInteractions, discord.ui.LayoutView):
 
     def readout_text(self, position=None):
         track = self.player.current
-        entries = [f"{compact_icon(self.player.bot, 'queue')} {self.player.queue.count}"]
+        entries = [f"{self.player.queue.count} в очереди"]
         if track is None:
-            return "-# " + "  ·  ".join(entries)
-        if track.source:
+            return "-# " + entries[0]
+        if track.source == "yandexmusic":
+            icon = _application_icon(self.player.bot, "ym_yamusic")
+            entries.insert(0, f"{icon} Яндекс Музыка".lstrip())
+        elif track.source:
             entries.insert(0, _metadata(track.source))
         if track.requester:
-            entries.append(track.requester.mention)
+            entries.append(f"Добавлен: {track.requester.mention}")
         elapsed = max(0, self.player.position if position is None else position)
         if track.is_stream:
             times = self.player.get_msg("common.status.live")
         elif track.length:
             elapsed = min(track.length, elapsed)
-            bars = round(14 * elapsed / track.length)
-            times = f"{format_ms(elapsed)}  {'▰' * bars}{'▱' * (14 - bars)}  {format_ms(track.length)}"
+            bar = _progress_bar(self.player.bot, elapsed, track.length)
+            times = f"{format_ms(elapsed)}  {bar}  {format_ms(track.length)}"
         else:
             times = f"`{format_ms(elapsed)}`"
         return times + "\n-# " + "  ·  ".join(entries)

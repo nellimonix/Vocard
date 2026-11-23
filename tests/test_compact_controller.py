@@ -8,12 +8,12 @@ from discord.http import handle_message_parameters
 
 from voicelink import Player
 from voicelink.enums import LoopType
-from voicelink.views.compact_controller import CompactController, ICONS
+from voicelink.views.compact_controller import CompactController, CompactIdle, ICONS, READOUT_ICONS
 from voicelink.views.controller import Forward, Rewind, Stop, StopPlayback
 
 
 def sample_player(*, custom=True):
-    emoji_ids = {name: emoji_id for name, emoji_id, _ in ICONS.values()} if custom else {}
+    emoji_ids = ({name: emoji_id for name, emoji_id, _ in ICONS.values()} | READOUT_ICONS) if custom else {}
     track = SimpleNamespace(title="Testing", author="Artist", uri="https://music.yandex.com/track/1",
                             thumbnail="https://avatars.yandex.net/image", source="yandexmusic",
                             requester=None, length=180000, is_stream=False, is_seekable=True)
@@ -31,6 +31,7 @@ class CompactControllerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(params.payload["flags"] & 32768, 32768)
             container, = params.payload["components"]
         self.assertEqual(container["type"], 17)
+        self.assertIsNone(container.get("accent_color"))
         items = container["components"]
         self.assertEqual(items[0]["accessory"]["type"], 11)
         self.assertNotIn(12, [node["type"] for node in items])
@@ -66,6 +67,35 @@ class CompactControllerTests(unittest.IsolatedAsyncioTestCase):
         view = CompactController(player, discord.Embed())
         rows = [item for item in view.frame.children if isinstance(item, discord.ui.ActionRow)]
         self.assertEqual(rows[1].children[2].emoji.name, ICONS["play"][2])
+        self.assertIn("▰▰▰▰▰▱▱▱▱▱", view.readout.content)
+
+    async def test_idle_container_does_not_inherit_the_accent_color(self):
+        view = CompactIdle(discord.Embed(colour=0xFFDA38, description="Idle"), "Idle")
+        self.assertIsNone(view.to_components()[0].get("accent_color"))
+
+    async def test_queue_source_and_requester_share_the_metadata_line(self):
+        player = sample_player()
+        player.current.requester = SimpleNamespace(mention="<@123456>")
+        player.bot.compact_app_emojis["ym_yamusic"] = 1234567
+        view = CompactController(player, discord.Embed())
+        for size in (0, 1, 2, 10):
+            player.queue.count = size
+            metadata = view.readout_text().splitlines()[1]
+            self.assertEqual(metadata, f"-# <:ym_yamusic:1234567> Яндекс Музыка  ·  {size} в очереди  ·  Добавлен: <@123456>")
+
+    async def test_progress_bar_uses_custom_start_middle_and_end_segments(self):
+        player = sample_player()
+        view = CompactController(player, discord.Embed())
+
+        def icon(name):
+            return f"<:{name}:{READOUT_ICONS[name]}>"
+
+        for elapsed, expected in (
+            (0, icon("ym_start_0_v2") + icon("ym_mid_0_v2") * 8 + icon("ym_end_0_v2")),
+            (90000, icon("ym_start_100_v2") + icon("ym_mid_100_v2") * 4 + icon("ym_mid_0_v2") * 4 + icon("ym_end_0_v2")),
+            (180000, icon("ym_start_100_v2") + icon("ym_mid_100_v2") * 8 + icon("ym_end_100_v2")),
+        ):
+            self.assertIn(expected, view.readout_text(elapsed).splitlines()[0])
 
     async def test_forward_uses_the_emoji_registered_in_the_current_application(self):
         player = sample_player()
