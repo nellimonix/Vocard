@@ -232,8 +232,8 @@ class Stop(ControlButton):
                 else:
                     return await self.send(interaction, "player.controls.leave.vote", interaction.user, len(self.player.stop_votes), required)
 
-        await self.send(interaction, "player.controls.leave.success", interaction.user)
         await self.player.teardown()
+        await self.send(interaction, "player.controls.leave.success", interaction.user)
 
 class StopPlayback(ControlButton):
     def __init__(self, **kwargs):

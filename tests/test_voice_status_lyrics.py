@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import discord
 
-from voicelink import Config, LangHandler, MongoDBHandler, Player
+from voicelink import Config, LangHandler, MongoDBHandler, Player, get_playback_player
 from voicelink.enums import RequestMethod
-from voicelink.exceptions import NodeException
+from voicelink.exceptions import NodeException, VoicelinkException
 from voicelink.ipc.methods import getLyrics
 from voicelink.lyrics import split_lyrics
 from voicelink.views.controller import Lyrics
@@ -323,6 +323,64 @@ class PlayerDisconnectTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.guild.voice_client)
         self.assertEqual(self.node.players, {})
         self.node.send.assert_awaited_once_with(RequestMethod.DELETE, "sessions/session/players/42")
+
+    async def test_external_kick_releases_both_players_before_saving_settings(self):
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def save(*args):
+            entered.set()
+            await release.wait()
+
+        with patch.object(MongoDBHandler, "update_settings", side_effect=save):
+            kicked = asyncio.create_task(self.player.on_voice_state_update({"channel_id": None}))
+            try:
+                await asyncio.wait_for(entered.wait(), timeout=1)
+                self.assertIsNone(self.guild.voice_client)
+                self.assertEqual(self.node.players, {})
+                self.node.send.assert_awaited_once_with(RequestMethod.DELETE, "sessions/session/players/42")
+                self.guild.change_voice_state.assert_not_awaited()
+                self.assertFalse(kicked.done())
+            finally:
+                release.set()
+                await kicked
+
+    async def test_play_reconnects_when_discord_has_lost_the_cached_voice_session(self):
+        self.guild.me = SimpleNamespace(voice=None)
+        self.player._voice_state["sessionId"] = "old-session"
+        ctx = SimpleNamespace(guild=self.guild)
+        replacement = object()
+
+        with patch.object(MongoDBHandler, "update_settings", new=AsyncMock()), \
+             patch("voicelink.player.connect_channel", return_value=replacement) as connect:
+            self.assertIs(await get_playback_player(ctx), replacement)
+
+        self.assertIsNone(self.guild.voice_client)
+        self.assertEqual(self.node.players, {})
+        self.guild.change_voice_state.assert_not_awaited()
+        connect.assert_awaited_once_with(ctx)
+
+    async def test_leave_waits_for_discord_before_releasing_voice_cache(self):
+        self.guild.me = SimpleNamespace(voice=SimpleNamespace(channel=self.player.channel))
+        self.player._voice_state["sessionId"] = "active-session"
+        sent = asyncio.Event()
+        self.guild.change_voice_state.side_effect = lambda **kwargs: sent.set()
+        closing = asyncio.create_task(self.player.disconnect())
+        try:
+            await asyncio.wait_for(sent.wait(), timeout=1)
+            self.assertIs(self.guild.voice_client, self.player)
+            self.assertEqual(self.node.players, {})
+        finally:
+            await self.player.on_voice_state_update({"channel_id": None})
+            await closing
+        self.assertIsNone(self.guild.voice_client)
+
+    async def test_inflight_search_cannot_enqueue_after_disconnect_starts(self):
+        self.player._closing = True
+        self.player.get_msg = Mock(return_value="no player")
+        with self.assertRaises(VoicelinkException):
+            await self.player.add_track(object())
+        self.assertTrue(self.player.queue.is_empty)
 
 
 class LyricsPaginationTests(unittest.TestCase):

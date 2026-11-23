@@ -102,6 +102,14 @@ async def connect_channel(ctx: Union[commands.Context, Interaction], channel: Vo
 
     return player
 
+async def get_playback_player(ctx: Union[commands.Context, Interaction]):
+    player = ctx.guild.voice_client
+    if player and not player.accepts_tracks:
+        await player.teardown()
+        player = ctx.guild.voice_client
+    return player or await connect_channel(ctx)
+
+
 class Player(VoiceProtocol):
     """The base player class for Voicelink.
        In order to initiate a player, you must pass it in as a cls when you connect to a channel.
@@ -156,6 +164,7 @@ class Player(VoiceProtocol):
         self._ending_track: Optional[Track] = None
 
         self._voice_state: dict = {}
+        self._voice_left = asyncio.Event()
 
         self.controller: Union[Message, PartialMessage] = None
         self._controller_view: Optional[InteractiveController] = None
@@ -210,6 +219,13 @@ class Player(VoiceProtocol):
     def is_connected(self) -> bool:
         """Property which returns whether or not the player is connected"""
         return self._is_connected
+
+    @property
+    def accepts_tracks(self) -> bool:
+        return (
+            not self._closing and self.channel is not None and self.guild.voice_client is self
+            and (not self._voice_state.get("sessionId") or getattr(self.guild.me, "voice", None) is not None)
+        )
 
     @property
     def is_paused(self) -> bool:
@@ -346,7 +362,8 @@ class Player(VoiceProtocol):
             if self._closing and method == RequestMethod.PATCH:
                 return {}
             uri = f"sessions/{self._node._session_id}/players/{self._guild.id}" + (f"?{query}" if query else "")
-            return await self._node.send(method, query=uri, data=data)
+            async with asyncio.timeout(10):
+                return await self._node.send(method, query=uri, data=data)
 
     async def _update_state(self, data: dict) -> None:
         """Updates the player's state based on the provided data."""
@@ -391,15 +408,18 @@ class Player(VoiceProtocol):
 
     async def on_voice_state_update(self, data: dict):
         """Handles a voice state update event."""
+        channel_id = data.get("channel_id")
+        if not channel_id:
+            self._voice_left.set()
         if self._closing:
             return
-        self._voice_state.update({"sessionId": data.get("session_id")})
-
-        if not (channel_id := data.get("channel_id")):
-            await self.teardown()
+        if not channel_id:
             self._voice_state.clear()
+            self.channel = None
+            await self.teardown()
             return
 
+        self._voice_state.update({"sessionId": data.get("session_id")})
         self.channel = self.guild.get_channel(int(channel_id))
 
         state = {**self._voice_state, "event": data} if data.get("token") else self._voice_state
@@ -426,7 +446,7 @@ class Player(VoiceProtocol):
 
     async def do_next(self):
         """Processes the next track in the queue."""
-        if self._closing or self._current or self.is_playing or not self.channel:
+        if not self.accepts_tracks or self._current or self.is_playing:
             return
 
         if self._paused:
@@ -435,6 +455,8 @@ class Player(VoiceProtocol):
         if self._track_is_stuck:
             await asyncio.sleep(10)
             self._track_is_stuck = False
+            if not self.accepts_tracks:
+                return
 
         if not self.guild.me.voice:
             await self.connect(timeout=0.0, reconnect=True)
@@ -565,24 +587,31 @@ class Player(VoiceProtocol):
     async def teardown(self):
         """Cleans up the player and associated resources."""
         if self._closing:
+            await self.disconnect()
             return
         self._closing = True
         self._stop_controller_view()
-        try:
-            await MongoDBHandler.update_settings(self.guild.id, {"$set": {
-                "last_active": (timeNow := round(time.time())),
-                "played_time": round(self.settings.get("played_time", 0) + ((timeNow - self.joinTime) / 60), 2)
-            }})
-
-            if self.is_ipc_connected:
-                await self.send_ws({"op": "playerClose"})
-        except:
-            pass
+        await self.destroy()
 
         try:
-            await self.update_voice_status(remove_status=True)
-            if self.controller:
+            async with asyncio.timeout(5):
+                await MongoDBHandler.update_settings(self.guild.id, {"$set": {
+                    "last_active": (timeNow := round(time.time())),
+                    "played_time": round(self.settings.get("played_time", 0) + ((timeNow - self.joinTime) / 60), 2)
+                }})
+
+                if self.is_ipc_connected and self.guild.voice_client is None:
+                    await self.send_ws({"op": "playerClose"})
+        except Exception:
+            self._logger.exception("Failed to save player shutdown state")
+
+        if self.controller is None:
+            return
+        try:
+            async with asyncio.timeout(5):
                 if self.controller.id == self.settings.get("music_request_channel", {}).get("controller_msg_id"):
+                    if self.guild.voice_client is not None:
+                        return
                     embed = self.build_embed()
                     if getattr(getattr(self.controller, "flags", None), "components_v2", False) is True:
                         view = CompactIdle(embed, self.get_msg("player.errors.noTrackPlaying"))
@@ -591,13 +620,10 @@ class Player(VoiceProtocol):
                         await self.controller.edit(embed=embed, view=None)
                 else:
                     await self.controller.delete()
-        except:
+        except (errors.NotFound, errors.Forbidden):
             pass
-
-        try:
-            await self.destroy()
-        except:
-            pass
+        except Exception:
+            self._logger.exception("Failed to clear the player controller")
 
     async def get_tracks(
         self,
@@ -671,9 +697,13 @@ class Player(VoiceProtocol):
             await self._remove_node_player()
         finally:
             try:
-                await self._voice_status_updater.close()
-                if guild.voice_client is self:
-                    await guild.change_voice_state(channel=None)
+                if guild.voice_client is self and self.channel is not None:
+                    known_session = bool(self._voice_state.get("sessionId"))
+                    if not known_session or getattr(guild.me, "voice", None) is not None:
+                        async with asyncio.timeout(5):
+                            await guild.change_voice_state(channel=None)
+                            if known_session:
+                                await self._voice_left.wait()
             finally:
                 self._is_connected = False
                 self._voice_state.clear()
@@ -683,6 +713,7 @@ class Player(VoiceProtocol):
                     else:
                         self.client._connection._remove_voice_client(guild.id)
                 self.channel = None
+                await self._voice_status_updater.close()
 
     async def _remove_node_player(self):
         node = self._node
@@ -779,6 +810,8 @@ class Player(VoiceProtocol):
 
     async def add_track(self, raw_tracks: Union[Track, List[Track]], *, start_time: int = 0, end_time: int = 0, at_front: bool = False, duplicate: bool = True) -> int:
         """Adds one or more tracks to the queue."""
+        if not self.accepts_tracks:
+            raise VoicelinkException(self.get_msg("player.errors.noPlayer"))
         tracks: List[Track] = []
         _duplicate_tracks = [] if self.queue._allow_duplicate and duplicate else [track.uri for track in self.queue._queue]
         raw_tracks = raw_tracks[0] if isinstance(raw_tracks, List) and len(raw_tracks) == 1 else raw_tracks

@@ -125,9 +125,7 @@ class Basic(commands.Cog):
         if ctx.interaction and not ctx.interaction.response.is_done():
             await ctx.defer()
 
-        player: voicelink.Player = ctx.guild.voice_client
-        if not player:
-            player = await voicelink.connect_channel(ctx)
+        player = await voicelink.get_playback_player(ctx)
 
         if not player.is_user_join(ctx.author):
             return await send_localized_message(ctx, "voice.connection.notInChannel", ctx.author.mention, player.channel.mention, ephemeral=True)
@@ -175,9 +173,7 @@ class Basic(commands.Cog):
         if not query:
             return await send_localized_message(interaction, "player.errors.noPlaySource", ephemeral=True)
 
-        player: voicelink.Player = interaction.guild.voice_client
-        if not player:
-            player = await voicelink.connect_channel(interaction)
+        player = await voicelink.get_playback_player(interaction)
 
         if not player.is_user_join(interaction.user):
             return await send_localized_message(interaction, "voice.connection.notInChannel", interaction.user.mention, player.channel.mention, ephemeral=True)
@@ -395,8 +391,10 @@ class Basic(commands.Cog):
                 else:
                     return await send_localized_message(ctx, "player.controls.leave.vote", ctx.author, len(player.stop_votes), required)
 
-        await send_localized_message(ctx, "player.controls.leave.success", ctx.author)
+        if ctx.interaction and not ctx.interaction.response.is_done():
+            await ctx.defer()
         await player.teardown()
+        await send_localized_message(ctx, "player.controls.leave.success", ctx.author)
 
 
     @commands.hybrid_command(name='loop', aliases=get_aliases('loop'), description=app_commands.locale_str('Change the loop mode.', key='basic.loop'))

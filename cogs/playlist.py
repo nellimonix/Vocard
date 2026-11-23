@@ -304,9 +304,7 @@ class Playlists(commands.Cog, name="playlist"):
         if result['position'] > max_p:
             return await send_localized_message(ctx, 'playlist.errors.noAccess', ephemeral=True)
 
-        player: voicelink.Player = ctx.guild.voice_client
-        if not player:
-            player = await voicelink.connect_channel(ctx)
+        player = await voicelink.get_playback_player(ctx)
 
         if result['playlist']['type'] == 'link':
             tracks = await search_playlist(result['playlist']['uri'], ctx.author, time_needed=False)

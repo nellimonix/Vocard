@@ -34,7 +34,7 @@ from .filters import *
 from .objects import *
 from .pool import *
 from .queue import *
-from .player import Player, connect_channel
+from .player import Player, connect_channel, get_playback_player
 from .placeholders import PlayerPlaceholder, BotPlaceholder
 from .mongodb import MongoDBHandler
 from .language import LangHandler

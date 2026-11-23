@@ -64,7 +64,7 @@ class AutocompleteTests(unittest.IsolatedAsyncioTestCase):
         async def connect(ctx):
             response.defer.assert_awaited_once()
             return player
-        with patch("voicelink.connect_channel", side_effect=connect), patch("cogs.basic.send_localized_message", new=AsyncMock()):
+        with patch("voicelink.player.connect_channel", side_effect=connect), patch("cogs.basic.send_localized_message", new=AsyncMock()):
             await self.cog._play(interaction, SimpleNamespace(content="https://example.com/track", attachments=[]))
 
 
