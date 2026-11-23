@@ -407,7 +407,7 @@ class Player(VoiceProtocol):
                 "sessionId": state["sessionId"],
                 "channelId": str(self.channel.id),
             }
-            voice = (self.node, data)
+            voice = (self.node, self.node._session_id, data)
             if self._voice_dispatched == voice:
                 return
             self._voice_ready.clear()

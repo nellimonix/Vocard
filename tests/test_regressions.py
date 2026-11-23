@@ -71,7 +71,7 @@ class AutocompleteTests(unittest.IsolatedAsyncioTestCase):
 class VoiceTests(unittest.IsolatedAsyncioTestCase):
     def voice_player(self, **kwargs):
         return SimpleNamespace(_voice_update_lock=asyncio.Lock(), _voice_ready=asyncio.Event(),
-                               _voice_dispatched=None, node=object(), **kwargs)
+                               _voice_dispatched=None, node=SimpleNamespace(_session_id="lavalink-session"), **kwargs)
 
     async def test_incomplete_voice_updates_are_skipped(self):
         player = self.voice_player(_closing=False, channel=SimpleNamespace(id=42), send=AsyncMock(), _logger=logging.getLogger("test"))
@@ -98,11 +98,14 @@ class VoiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_voice_patch_retries_timeout_and_deduplicates_an_acknowledged_update(self):
         state = {"sessionId": "session", "event": {"token": "token", "endpoint": "voice.example"}}
         player = self.voice_player(_closing=False, channel=SimpleNamespace(id=42), _voice_state=state,
-                                   send=AsyncMock(side_effect=[TimeoutError(), {}]), _logger=Mock())
+                                   send=AsyncMock(side_effect=[TimeoutError(), {}, {}]), _logger=Mock())
         await Player._dispatch_voice_update(player)
         self.assertTrue(player._voice_ready.is_set())
         await Player._dispatch_voice_update(player)
         self.assertEqual(player.send.await_count, 2)
+        player.node._session_id = "replacement-session"
+        await Player._dispatch_voice_update(player)
+        self.assertEqual(player.send.await_count, 3)
 
     async def test_interaction_connect_uses_client_and_explicit_channel(self):
         interaction = Mock(spec=discord.Interaction)
