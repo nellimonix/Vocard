@@ -48,7 +48,7 @@ def _application_icon(bot, name):
 
 def compact_icon(bot, action):
     name, _, fallback = ICONS[action]
-    export_name = f"{name.removesuffix('_v2')}_x15"
+    export_name = f"{name.removesuffix('_v2')}_x125"
     return _application_icon(bot, export_name) or _application_icon(bot, name) or fallback
 
 
