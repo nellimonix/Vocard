@@ -48,7 +48,8 @@ def _application_icon(bot, name):
 
 def compact_icon(bot, action):
     name, _, fallback = ICONS[action]
-    return _application_icon(bot, name) or fallback
+    export_name = f"{name.removesuffix('_v2')}_x2"
+    return _application_icon(bot, export_name) or _application_icon(bot, name) or fallback
 
 
 def _progress_bar(bot, elapsed, duration):
@@ -106,8 +107,13 @@ class CompactController(ControllerInteractions, discord.ui.LayoutView):
         self.frame = discord.ui.Container()
         self.add_item(self.frame)
         self._add_track_header(embed)
-        self.readout = discord.ui.TextDisplay(self.readout_text())
-        self.frame.add_item(self.readout)
+        self.progress = None
+        if track := self.player.current:
+            self.progress = discord.ui.TextDisplay(self.progress_text(track))
+            self.frame.add_item(self.progress)
+            self.frame.add_item(discord.ui.Separator(visible=False))
+        self.metadata = discord.ui.TextDisplay(self.metadata_text())
+        self.frame.add_item(self.metadata)
         self.frame.add_item(discord.ui.Separator())
         self._add_controls()
 
@@ -150,7 +156,7 @@ class CompactController(ControllerInteractions, discord.ui.LayoutView):
                 row.add_item(item)
             self.frame.add_item(row)
 
-    def readout_text(self, position=None):
+    def metadata_text(self):
         track = self.player.current
         entries = [f"{self.player.queue.count} в очереди"]
         if track is None:
@@ -162,17 +168,20 @@ class CompactController(ControllerInteractions, discord.ui.LayoutView):
             entries.insert(0, _metadata(track.source))
         if track.requester:
             entries.append(f"Добавлен: {track.requester.mention}")
+        return "-# " + "  ·  ".join(entries)
+
+    def progress_text(self, track, position=None):
         elapsed = max(0, self.player.position if position is None else position)
         if track.is_stream:
-            times = self.player.get_msg("common.status.live")
-        elif track.length:
-            elapsed = min(track.length, elapsed)
-            bar = _progress_bar(self.player.bot, elapsed, track.length)
-            times = f"{format_ms(elapsed)}  {bar}  {format_ms(track.length)}"
-        else:
-            times = f"`{format_ms(elapsed)}`"
-        return times + "\n-# " + "  ·  ".join(entries)
+            return self.player.get_msg("common.status.live")
+        if not track.length:
+            return f"`{format_ms(elapsed)}`"
+        elapsed = min(track.length, elapsed)
+        bar = _progress_bar(self.player.bot, elapsed, track.length)
+        return f"{format_ms(elapsed)}  {bar}  {format_ms(track.length)}"
 
     def refresh_readout(self, position=None):
-        self.readout.content = self.readout_text(position)
+        if self.progress is not None and (track := self.player.current):
+            self.progress.content = self.progress_text(track, position)
+        self.metadata.content = self.metadata_text()
         self.volume_readout.label = f"{self.player.volume}%"

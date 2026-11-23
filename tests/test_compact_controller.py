@@ -35,6 +35,8 @@ class CompactControllerTests(unittest.IsolatedAsyncioTestCase):
         items = container["components"]
         self.assertEqual(items[0]["accessory"]["type"], 11)
         self.assertNotIn(12, [node["type"] for node in items])
+        self.assertEqual([item["type"] for item in items[1:4]], [10, 14, 10])
+        self.assertFalse(items[2]["divider"])
         rows = [node["components"] for node in items if node["type"] == 1]
         self.assertEqual([len(row) for row in rows], [5, 5, 5])
         roles = (("shuffle", "volumedown", None, "volumeup", "loop"),
@@ -54,11 +56,11 @@ class CompactControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(view.frame.children[-1].children[-2], StopPlayback)
         self.assertIsInstance(view.frame.children[-1].children[-1], Stop)
         self.assertEqual(view.frame.children[-1].children[-3].emoji.id, ICONS["lyrics"][1])
-        self.assertIn("01:30", view.readout.content)
+        self.assertIn("01:30", view.progress.content)
         player.volume = 60
         view.refresh_readout(120000)
-        self.assertIn("02:00", view.readout.content)
-        self.assertNotIn("60%", view.readout.content)
+        self.assertIn("02:00", view.progress.content)
+        self.assertNotIn("60%", view.metadata.content)
         self.assertEqual(view.volume_readout.label, "60%")
 
     async def test_non_owner_app_falls_back_to_unicode(self):
@@ -67,7 +69,7 @@ class CompactControllerTests(unittest.IsolatedAsyncioTestCase):
         view = CompactController(player, discord.Embed())
         rows = [item for item in view.frame.children if isinstance(item, discord.ui.ActionRow)]
         self.assertEqual(rows[1].children[2].emoji.name, ICONS["play"][2])
-        self.assertIn("▰▰▰▰▰▱▱▱▱▱", view.readout.content)
+        self.assertIn("▰▰▰▰▰▱▱▱▱▱", view.progress.content)
 
     async def test_idle_container_does_not_inherit_the_accent_color(self):
         view = CompactIdle(discord.Embed(colour=0xFFDA38, description="Idle"), "Idle")
@@ -80,7 +82,7 @@ class CompactControllerTests(unittest.IsolatedAsyncioTestCase):
         view = CompactController(player, discord.Embed())
         for size in (0, 1, 2, 10):
             player.queue.count = size
-            metadata = view.readout_text().splitlines()[1]
+            metadata = view.metadata_text()
             self.assertEqual(metadata, f"-# <:ym_yamusic:1234567> Яндекс Музыка  ·  {size} в очереди  ·  Добавлен: <@123456>")
 
     async def test_progress_bar_uses_custom_start_middle_and_end_segments(self):
@@ -95,7 +97,7 @@ class CompactControllerTests(unittest.IsolatedAsyncioTestCase):
             (90000, icon("ym_start_100_v2") + icon("ym_mid_100_v2") * 4 + icon("ym_mid_0_v2") * 4 + icon("ym_end_0_v2")),
             (180000, icon("ym_start_100_v2") + icon("ym_mid_100_v2") * 8 + icon("ym_end_100_v2")),
         ):
-            self.assertIn(expected, view.readout_text(elapsed).splitlines()[0])
+            self.assertIn(expected, view.progress_text(player.current, elapsed))
 
     async def test_forward_uses_the_emoji_registered_in_the_current_application(self):
         player = sample_player()
@@ -103,6 +105,15 @@ class CompactControllerTests(unittest.IsolatedAsyncioTestCase):
         view = CompactController(player, discord.Embed())
         rows = [item for item in view.frame.children if isinstance(item, discord.ui.ActionRow)]
         self.assertEqual(rows[1].children[4].emoji.id, 1574295953220042753)
+
+    async def test_exported_emoji_takes_priority_over_the_original_when_registered(self):
+        player = sample_player()
+        player.bot.compact_app_emojis["ym_forward_next30_x2"] = 1574295953220042753
+        view = CompactController(player, discord.Embed())
+        rows = [item for item in view.frame.children if isinstance(item, discord.ui.ActionRow)]
+        self.assertEqual(rows[1].children[4].emoji.name, "ym_forward_next30_x2")
+        self.assertEqual(rows[1].children[4].emoji.id, 1574295953220042753)
+        self.assertEqual(rows[1].children[2].emoji.id, ICONS["pause"][1])
 
     async def test_compact_seek_intervals_and_track_bounds(self):
         player = sample_player()
