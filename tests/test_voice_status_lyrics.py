@@ -8,11 +8,29 @@ from unittest.mock import AsyncMock, Mock, patch
 import discord
 
 from voicelink import Config, LangHandler, MongoDBHandler, Player
+from voicelink.enums import RequestMethod
+from voicelink.exceptions import NodeException
 from voicelink.ipc.methods import getLyrics
 from voicelink.lyrics import split_lyrics
 from voicelink.views.controller import Lyrics
 from voicelink.views.lyrics import LyricsView
 from voicelink.voice_status import VoiceStatusUpdater
+
+
+def connected_player(logger, channel):
+    guild = SimpleNamespace(id=42, voice_client=None, change_voice_state=AsyncMock())
+    channel.guild = guild
+    channel._get_voice_client_key = Mock(return_value=(guild.id, None))
+    clear_client = Mock(side_effect=lambda _: setattr(guild, "voice_client", None))
+    client = SimpleNamespace(ipc_client=None, user=SimpleNamespace(id=1),
+                             _connection=SimpleNamespace(_remove_voice_client=clear_client))
+    node = SimpleNamespace(_logger=logger, _session_id="session", players={}, send=AsyncMock())
+    with patch("voicelink.player.NodePool.get_node", return_value=node):
+        player = Player(client, channel, SimpleNamespace(author=None), {})
+    guild.voice_client = player
+    node.players[guild.id] = player
+    player._is_connected = True
+    return player
 
 
 class VoiceStatusTests(unittest.IsolatedAsyncioTestCase):
@@ -213,12 +231,15 @@ class VoiceStatusTests(unittest.IsolatedAsyncioTestCase):
         self.updater.update(self.channel, 'pending')
         await self.tick()
         task = self.updater._task
-        player = SimpleNamespace(_voice_status_updater=self.updater, _stop_controller_view=Mock(), guild=SimpleNamespace(name='test', id=42, change_voice_state=AsyncMock()), cleanup=Mock(), _logger=self.logger, channel=self.channel, _is_connected=True)
-        await Player.disconnect(player)
+        player = connected_player(self.logger, self.channel)
+        player._voice_status_updater = self.updater
+        await player.disconnect(force=True)
         self.assertTrue(task.cancelled())
         self.assertIsNone(player.channel)
         self.assertFalse(player._is_connected)
-        player.cleanup.assert_called_once()
+        self.assertIsNone(player.guild.voice_client)
+        self.assertEqual(player.node.players, {})
+        player.node.send.assert_awaited_once_with(RequestMethod.DELETE, "sessions/session/players/42")
         self.channel.edit.assert_awaited_with(status=None)
 
     async def test_player_queues_status_without_waiting_for_discord(self):
@@ -230,6 +251,78 @@ class VoiceStatusTests(unittest.IsolatedAsyncioTestCase):
         self.channel.edit.assert_not_awaited()
         await self.tick()
         self.channel.edit.assert_awaited_once_with(status='track')
+
+
+class PlayerDisconnectTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.player = connected_player(Mock(), SimpleNamespace(id=42))
+        self.guild = self.player.guild
+        self.node = self.player.node
+
+    async def test_disconnect_waits_for_pending_update_and_survives_caller_cancellation(self):
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def send(method, query, data=None):
+            if method == RequestMethod.PATCH:
+                started.set()
+                await release.wait()
+
+        self.node.send.side_effect = send
+        update = asyncio.create_task(self.player.send(RequestMethod.PATCH))
+        await started.wait()
+        first_close = asyncio.create_task(self.player.disconnect())
+        await asyncio.sleep(0)
+        first_close.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await first_close
+        late_update = asyncio.create_task(self.player.send(RequestMethod.PATCH))
+        self.assertIs(self.guild.voice_client, self.player)
+        self.node.send.assert_awaited_once()
+        release.set()
+        await asyncio.gather(update, late_update, self.player.disconnect(), self.player.destroy())
+
+        self.assertEqual([call.args[0] for call in self.node.send.await_args_list],
+                         [RequestMethod.PATCH, RequestMethod.DELETE])
+        self.guild.change_voice_state.assert_awaited_once_with(channel=None)
+        self.assertIsNone(self.guild.voice_client)
+        self.assertEqual(self.node.players, {})
+
+    async def test_old_disconnect_preserves_new_voice_client_on_same_node(self):
+        replacement = SimpleNamespace(node=self.node)
+        self.guild.voice_client = replacement
+        await self.player.disconnect()
+
+        self.assertIs(self.guild.voice_client, replacement)
+        self.assertEqual(self.node.players, {})
+        self.guild.change_voice_state.assert_not_awaited()
+        self.node.send.assert_not_awaited()
+
+    async def test_old_disconnect_preserves_replacement_in_node_pool(self):
+        replacement = SimpleNamespace(node=self.node)
+        self.guild.voice_client = replacement
+        self.node.players[self.guild.id] = replacement
+        await self.player.destroy()
+
+        self.assertIs(self.guild.voice_client, replacement)
+        self.assertIs(self.node.players[self.guild.id], replacement)
+        self.node.send.assert_not_awaited()
+
+    async def test_disconnect_retries_failed_node_delete(self):
+        self.node.send.side_effect = [NodeException(), None]
+        await self.player.disconnect()
+
+        self.assertEqual(self.node.send.await_count, 2)
+        self.assertEqual(self.node.players, {})
+        self.assertIsNone(self.guild.voice_client)
+
+    async def test_disconnect_clears_cached_client_when_channel_is_missing(self):
+        self.player.channel = None
+        await self.player.disconnect()
+
+        self.assertIsNone(self.guild.voice_client)
+        self.assertEqual(self.node.players, {})
+        self.node.send.assert_awaited_once_with(RequestMethod.DELETE, "sessions/session/players/42")
 
 
 class LyricsPaginationTests(unittest.TestCase):

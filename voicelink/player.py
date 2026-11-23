@@ -29,6 +29,7 @@ from math import ceil
 from random import shuffle, choice
 from typing import Any, Dict, List, Optional, Union, Tuple, TYPE_CHECKING
 
+from aiohttp import ClientError
 from discord import (
     Client,
     Guild,
@@ -51,7 +52,15 @@ from .objects import Track, Playlist
 from .filters import Filter, Filters
 from .enums import SearchType, LoopType, RequestMethod
 from .events import VoicelinkEvent, TrackEndEvent, TrackStartEvent, TrackExceptionEvent
-from .exceptions import VoicelinkException, FilterInvalidArgument, TrackInvalidPosition, FilterTagAlreadyInUse, DuplicateTrack
+from .exceptions import (
+    DuplicateTrack,
+    FilterInvalidArgument,
+    FilterTagAlreadyInUse,
+    NodeException,
+    NodeNotAvailable,
+    TrackInvalidPosition,
+    VoicelinkException,
+)
 from .placeholders import PlayerPlaceholder
 from .queue import Queue, QUEUE_TYPES
 from .mongodb import MongoDBHandler
@@ -151,6 +160,8 @@ class Player(VoiceProtocol):
         self._controller_retry_at: float = 0.0
         self._controller_retry_channel = None
         self._closing = False
+        self._disconnect_task: Optional[asyncio.Task[None]] = None
+        self._request_lock = asyncio.Lock()
         self._updating: bool = False
 
         self.pause_votes = set()
@@ -329,11 +340,16 @@ class Player(VoiceProtocol):
 
     async def send(self, method: RequestMethod, query: str = None, data: Union[Dict, str] = {}) -> Dict:
         """Sends an HTTP request to the node with the given method, query, and data."""
-        uri: str = f"sessions/{self._node._session_id}/players/{self._guild.id}" + (f"?{query}" if query else "")
-        return await self._node.send(method, query=uri, data=data)
+        async with self._request_lock:
+            if self._closing and method == RequestMethod.PATCH:
+                return {}
+            uri = f"sessions/{self._node._session_id}/players/{self._guild.id}" + (f"?{query}" if query else "")
+            return await self._node.send(method, query=uri, data=data)
 
     async def _update_state(self, data: dict) -> None:
         """Updates the player's state based on the provided data."""
+        if self._closing:
+            return
         state: dict = data.get("state")
         self._last_update = time.time() * 1000
         self._is_connected = state.get("connected")
@@ -353,7 +369,7 @@ class Player(VoiceProtocol):
         """Dispatches a voice update to the node."""
         state = voice_data or self._voice_state
         event = state.get("event") or {}
-        if not self.channel or not state.get("sessionId") or not event.get("token") or not event.get("endpoint"):
+        if self._closing or not self.channel or not state.get("sessionId") or not event.get("token") or not event.get("endpoint"):
             return
 
         data = {
@@ -373,6 +389,8 @@ class Player(VoiceProtocol):
 
     async def on_voice_state_update(self, data: dict):
         """Handles a voice state update event."""
+        if self._closing:
+            return
         self._voice_state.update({"sessionId": data.get("session_id")})
 
         if not (channel_id := data.get("channel_id")):
@@ -406,7 +424,7 @@ class Player(VoiceProtocol):
 
     async def do_next(self):
         """Processes the next track in the queue."""
-        if self._current or self.is_playing or not self.channel:
+        if self._closing or self._current or self.is_playing or not self.channel:
             return
 
         if self._paused:
@@ -536,6 +554,8 @@ class Player(VoiceProtocol):
 
     async def teardown(self):
         """Cleans up the player and associated resources."""
+        if self._closing:
+            return
         self._closing = True
         self._stop_controller_view()
         try:
@@ -551,7 +571,6 @@ class Player(VoiceProtocol):
 
         try:
             await self.update_voice_status(remove_status=True)
-            self._cancel_inactive_cleanup_timer()
             if self.controller:
                 if self.controller.id == self.settings.get("music_request_channel", {}).get("controller_msg_id"):
                     await self.controller.edit(embed=self.build_embed(), view=None)
@@ -584,7 +603,11 @@ class Player(VoiceProtocol):
 
     async def connect(self, *, timeout: float, reconnect: bool, self_deaf: bool = True, self_mute: bool = False):
         """Connects the player to a voice channel."""
+        if self._closing:
+            return
         await self.guild.change_voice_state(channel=self.channel, self_deaf=True, self_mute=self_mute)
+        if self._closing:
+            return
         self._node._players[self.guild.id] = self
         self._is_connected = True
 
@@ -599,32 +622,60 @@ class Player(VoiceProtocol):
     async def disconnect(self, *, force: bool = False):
         """Disconnects the player from voice."""
         self._closing = True
-        self._stop_controller_view()
-        await self._voice_status_updater.close()
-        try:
-            await self.guild.change_voice_state(channel=None)
-        finally:
-            self.cleanup()
-            self._is_connected = False
-            self.channel = None
+        if self._disconnect_task is None:
+            self._disconnect_task = asyncio.create_task(self._disconnect())
+        await asyncio.shield(self._disconnect_task)
 
-        self._logger.debug(f"Player in {self.guild.name}({self.guild.id}) has been disconnected from a voice channel.")
-
-    async def destroy(self):
-        """Disconnects and destroys the player, and runs internal cleanup."""
-        self._closing = True
+    async def _disconnect(self):
         self._stop_controller_view()
         self._cancel_inactive_cleanup_timer()
-
+        guild = self.guild
         try:
-            await self.disconnect()
-        except:
-            # 'NoneType' has no attribute '_get_voice_client_key' raised by self.cleanup() ->
-            # assume we're already disconnected and cleaned up
-            assert self.channel is None and not self.is_connected
+            await self._remove_node_player()
+        finally:
+            try:
+                await self._voice_status_updater.close()
+                if guild.voice_client is self:
+                    await guild.change_voice_state(channel=None)
+            finally:
+                self._is_connected = False
+                self._voice_state.clear()
+                if guild.voice_client is self:
+                    if self.channel:
+                        self.cleanup()
+                    else:
+                        self.client._connection._remove_voice_client(guild.id)
+                self.channel = None
 
-        self._node._players.pop(self.guild.id, None)
-        await self.send(method=RequestMethod.DELETE)
+    async def _remove_node_player(self):
+        node = self._node
+        guild_id = self.guild.id
+        session_id = node._session_id
+        if node.players.get(guild_id) is not self:
+            return
+        async with self._request_lock:
+            try:
+                for attempt in range(2):
+                    voice_client = self.guild.voice_client
+                    if (
+                        not session_id or node._session_id != session_id or node.players.get(guild_id) is not self
+                        or (voice_client is not self and getattr(voice_client, "node", None) is node)
+                    ):
+                        return
+                    try:
+                        async with asyncio.timeout(5):
+                            await node.send(RequestMethod.DELETE, f"sessions/{session_id}/players/{guild_id}")
+                        return
+                    except (ClientError, NodeException, NodeNotAvailable, TimeoutError):
+                        if attempt == 1:
+                            self._logger.exception("Failed to remove player from Lavalink")
+            finally:
+                if node.players.get(guild_id) is self:
+                    node.players.pop(guild_id)
+
+    async def destroy(self):
+        """Disconnects and destroys the player."""
+        await self.disconnect()
 
     async def play(
         self,
@@ -900,6 +951,8 @@ class Player(VoiceProtocol):
 
     async def change_node(self, identifier: str = None) -> None:
         """Changes the audio processing node for the guild.."""
+        if self._closing:
+            return
         try:
             node = NodePool.get_node(identifier=identifier)
         except:

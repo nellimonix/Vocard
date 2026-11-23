@@ -259,6 +259,8 @@ class Node:
             headers={"Authorization": self._password},
             json=data
         ) as resp:
+            if method == RequestMethod.DELETE and resp.status in (204, 404):
+                return None
             if resp.status >= 300:
                 raise NodeException(f"Getting errors from Lavalink REST api")
 

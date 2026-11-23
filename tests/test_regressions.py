@@ -70,21 +70,21 @@ class AutocompleteTests(unittest.IsolatedAsyncioTestCase):
 
 class VoiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_incomplete_voice_updates_are_skipped(self):
-        player = SimpleNamespace(channel=SimpleNamespace(id=42), send=AsyncMock(), _logger=logging.getLogger("test"))
+        player = SimpleNamespace(_closing=False, channel=SimpleNamespace(id=42), send=AsyncMock(), _logger=logging.getLogger("test"))
         for state in [{}, {"sessionId": "session"}, {"sessionId": "session", "event": {"token": "token", "endpoint": None}}]:
             player._voice_state = state
             await Player._dispatch_voice_update(player)
         player.send.assert_not_awaited()
 
     async def test_valid_voice_update_accepts_additional_state_fields(self):
-        player = SimpleNamespace(channel=SimpleNamespace(id=42), _voice_state={"sessionId": "session", "event": {"token": "token", "endpoint": "voice.example"}, "extra": True}, send=AsyncMock(), _logger=logging.getLogger("test"))
+        player = SimpleNamespace(_closing=False, channel=SimpleNamespace(id=42), _voice_state={"sessionId": "session", "event": {"token": "token", "endpoint": "voice.example"}, "extra": True}, send=AsyncMock(), _logger=logging.getLogger("test"))
         await Player._dispatch_voice_update(player)
         player.send.assert_awaited_once_with(method=RequestMethod.PATCH, data={"voice": {"token": "token", "endpoint": "voice.example", "sessionId": "session", "channelId": "42"}})
 
     async def test_voice_event_order_does_not_block_connection(self):
         for server_first in [True, False]:
             channel = SimpleNamespace(id=42)
-            player = SimpleNamespace(channel=channel, guild=SimpleNamespace(get_channel=Mock(return_value=channel)), _voice_state={}, send=AsyncMock(), _logger=logging.getLogger("test"))
+            player = SimpleNamespace(_closing=False, channel=channel, guild=SimpleNamespace(get_channel=Mock(return_value=channel)), _voice_state={}, send=AsyncMock(), _logger=logging.getLogger("test"))
             player._dispatch_voice_update = lambda state=None: Player._dispatch_voice_update(player, state)
             updates = [(Player.on_voice_server_update, {"token": "token", "endpoint": "voice.example"}), (Player.on_voice_state_update, {"session_id": "session", "channel_id": "42"})]
             for method, payload in updates if server_first else reversed(updates):
