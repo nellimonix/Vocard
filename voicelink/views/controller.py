@@ -188,8 +188,8 @@ class PlayPause(ControlButton):
                 if len(votes) < (required := self.player.required()):
                     return await self.send(interaction, f"player.controls.{vote_type}.vote", interaction.user, len(votes), required)
 
-        self.change_states(self.playing_status(self.player))
         await self.player.set_pause(is_paused, interaction.user)
+        self.change_states("resume" if is_paused else "pause")
         await self.refresh_controller(interaction)
 
 class Skip(ControlButton):
@@ -279,8 +279,10 @@ class AddFav(ControlButton):
 
 class Loop(ControlButton):
     def __init__(self, **kwargs):
+        repeat = kwargs["player"].queue._repeat
+        mode = repeat.mode if kwargs.get("icon_only") else repeat.peek_next()
         super().__init__(
-            default_states=kwargs["player"].queue._repeat.peek_next().name,
+            default_states=mode.name,
             **kwargs
         )
 
@@ -288,8 +290,8 @@ class Loop(ControlButton):
         if not self.player.is_privileged(interaction.user):
             return await self.send(interaction, 'permissions.missingMode', ephemeral=True)
 
-        await self.player.set_repeat(requester=interaction.user)
-        self.change_states(self.player.queue._repeat.peek_next().name)
+        mode = await self.player.set_repeat(requester=interaction.user)
+        self.change_states(mode.name if self.icon_only else self.player.queue._repeat.peek_next().name)
 
         await self.refresh_controller(interaction)
 
@@ -301,7 +303,7 @@ class VolumeUp(ControlButton):
         if not self.player.is_privileged(interaction.user):
             return await self.send(interaction, "permissions.missingFunction")
 
-        value = value if (value := self.player.volume + 20) <= 150 else 150
+        value = min(150, self.player.volume + (10 if self.icon_only else 20))
         await self.player.set_volume(value, interaction.user)
 
         if self.icon_only:
@@ -317,7 +319,7 @@ class VolumeDown(ControlButton):
         if not self.player.is_privileged(interaction.user):
             return await self.send(interaction, "permissions.missingFunction")
 
-        value = value if (value := self.player.volume - 20) >= 0 else 0
+        value = max(0, self.player.volume - (10 if self.icon_only else 20))
         await self.player.set_volume(value, interaction.user)
 
         if self.icon_only:

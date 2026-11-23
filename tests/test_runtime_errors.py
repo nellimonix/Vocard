@@ -28,13 +28,15 @@ class RuntimeErrorTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_pause_uses_existing_localization_key(self):
         Basic = importlib.import_module("cogs.basic").Basic
-        player = SimpleNamespace(is_paused=False, is_privileged=Mock(return_value=True), set_pause=AsyncMock())
+        player = SimpleNamespace(is_paused=False, is_privileged=Mock(return_value=True), set_pause=AsyncMock(),
+                                 invoke_controller=AsyncMock())
         response = SimpleNamespace(is_done=Mock(return_value=False))
         ctx = SimpleNamespace(interaction=SimpleNamespace(response=response), guild=SimpleNamespace(voice_client=player), author=Mock(), defer=AsyncMock())
         with patch("cogs.basic.send_localized_message", new=AsyncMock()) as send:
-            await Basic.pause.callback(SimpleNamespace(), ctx)
+            await Basic.pause.callback(SimpleNamespace(bot=SimpleNamespace(compact_controller=True)), ctx)
         ctx.defer.assert_awaited_once()
         player.set_pause.assert_awaited_once_with(True, ctx.author)
+        player.invoke_controller.assert_awaited_once_with()
         send.assert_awaited_once_with(ctx, "player.controls.pause.success", ctx.author)
 
     async def test_controller_acknowledges_before_button_work(self):

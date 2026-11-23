@@ -6,9 +6,10 @@ import _bootstrap
 import discord
 from discord.http import handle_message_parameters
 
-from voicelink import Player
+from voicelink import Node, Player, SearchType
 from voicelink.enums import LoopType
 from voicelink.views.compact_controller import CompactController, CompactIdle, ICONS, READOUT_ICONS
+from voicelink.queue import LoopTypeCycle
 from voicelink.views.controller import Forward, Rewind, Stop, StopPlayback
 
 
@@ -16,9 +17,8 @@ def sample_player(*, custom=True):
     emoji_ids = ({name: emoji_id for name, emoji_id, _ in ICONS.values()} | READOUT_ICONS) if custom else {}
     track = SimpleNamespace(title="Testing", author="Artist", uri="https://music.yandex.com/track/1",
                             thumbnail="https://avatars.yandex.net/image", source="yandexmusic",
-                            requester=None, length=180000, is_stream=False, is_seekable=True)
-    queue = SimpleNamespace(count=2, is_empty=False, history=lambda: [],
-                            _repeat=SimpleNamespace(peek_next=lambda: LoopType.OFF))
+                            requester=None, length=180000, is_stream=False, is_seekable=True, artist_url=None)
+    queue = SimpleNamespace(count=2, is_empty=False, history=lambda: [], _repeat=LoopTypeCycle())
     return SimpleNamespace(bot=SimpleNamespace(compact_app_emojis=emoji_ids), current=track, position=90000,
                            is_paused=False, volume=100, queue=queue, get_msg=lambda key: key)
 
@@ -49,6 +49,8 @@ class CompactControllerTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(int(button["emoji"]["id"]), ICONS[action][1])
         self.assertEqual(rows[0][2]["label"], "100%")
         self.assertTrue(rows[0][2]["disabled"])
+        self.assertEqual(rows[0][4]["style"], discord.ButtonStyle.secondary.value)
+        self.assertEqual(rows[1][2]["style"], discord.ButtonStyle.secondary.value)
         self.assertEqual(rows[2][0]["style"], discord.ButtonStyle.success.value)
         self.assertTrue(rows[2][0]["disabled"])
         self.assertEqual(rows[2][4]["style"], discord.ButtonStyle.danger.value)
@@ -69,7 +71,64 @@ class CompactControllerTests(unittest.IsolatedAsyncioTestCase):
         view = CompactController(player, discord.Embed())
         rows = [item for item in view.frame.children if isinstance(item, discord.ui.ActionRow)]
         self.assertEqual(rows[1].children[2].emoji.name, ICONS["play"][2])
+        self.assertEqual(rows[1].children[2].style, discord.ButtonStyle.primary)
         self.assertIn("▰▰▰▰▰▱▱▱▱▱", view.progress.content)
+
+    async def test_artist_url_from_loaded_playlist_is_shown_for_primary_artist(self):
+        player = sample_player()
+        payload = {
+            "encoded": "track",
+            "info": {"title": "СЭИНТ ПИ", "author": "BOOKER, Крип-А-Крип", "uri": "https://music.yandex.ru/track/157583433",
+                     "artworkUrl": player.current.thumbnail, "sourceName": "yandexmusic", "length": 180000},
+            "pluginInfo": {"artistUrl": "https://music.yandex.ru/artist/4622993"},
+        }
+        node = SimpleNamespace(send=AsyncMock(return_value={"loadType": "playlist", "data": {"info": {}, "tracks": [payload]}}))
+        playlist = await Node.get_tracks(node, "https://music.yandex.ru/track/157583433", requester=None,
+                                         search_type=SearchType.YANDEX_MUSIC)
+        player.current = playlist.tracks[0]
+        player.get_msg = lambda key: "**Сейчас играет:**\n```{0}```"
+        view = CompactController(player, discord.Embed())
+        header = list(view.frame.children[0].children)
+        self.assertEqual(header[0].content, "-# Сейчас играет")
+        self.assertEqual(header[2].content, "[BOOKER](<https://music.yandex.ru/artist/4622993>), Крип-А-Крип")
+
+    async def test_repeat_color_follows_current_mode_and_compact_volume_changes_by_ten(self):
+        player = sample_player()
+        player.is_privileged = Mock(return_value=True)
+        player.set_repeat = AsyncMock(side_effect=lambda **_: player.queue._repeat.next())
+        player.set_volume = AsyncMock(side_effect=lambda volume, _: setattr(player, "volume", volume))
+        view = CompactController(player, discord.Embed())
+        row = next(item for item in view.frame.children if isinstance(item, discord.ui.ActionRow))
+        interaction = SimpleNamespace(user=object(), edit_original_response=AsyncMock())
+        repeat = row.children[4]
+        for mode, style in ((LoopType.TRACK, discord.ButtonStyle.primary), (LoopType.QUEUE, discord.ButtonStyle.success),
+                            (LoopType.OFF, discord.ButtonStyle.secondary)):
+            await repeat.callback(interaction)
+            self.assertEqual(player.queue._repeat.mode, mode)
+            self.assertEqual(repeat.style, style)
+
+        await row.children[1].callback(interaction)
+        self.assertEqual(view.volume_readout.label, "90%")
+        await row.children[3].callback(interaction)
+        self.assertEqual(player.set_volume.await_args_list, [call(90, interaction.user), call(100, interaction.user)])
+
+    async def test_pause_button_turns_blue_only_when_play_is_available(self):
+        player = sample_player()
+        player.is_privileged = Mock(return_value=True)
+        player.pause_votes = set()
+        player.resume_votes = set()
+        player.set_pause = AsyncMock(side_effect=lambda pause, _: setattr(player, "is_paused", pause))
+        view = CompactController(player, discord.Embed())
+        buttons = [item for item in view.frame.children if isinstance(item, discord.ui.ActionRow)]
+        toggle = buttons[1].children[2]
+        interaction = SimpleNamespace(user=object(), edit_original_response=AsyncMock())
+
+        await toggle.callback(interaction)
+        self.assertEqual(toggle.emoji.id, ICONS["play"][1])
+        self.assertEqual(toggle.style, discord.ButtonStyle.primary)
+        await toggle.callback(interaction)
+        self.assertEqual(toggle.emoji.id, ICONS["pause"][1])
+        self.assertEqual(toggle.style, discord.ButtonStyle.secondary)
 
     async def test_idle_container_does_not_inherit_the_accent_color(self):
         view = CompactIdle(discord.Embed(colour=0xFFDA38, description="Idle"), "Idle")

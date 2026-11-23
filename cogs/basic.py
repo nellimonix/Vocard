@@ -229,6 +229,8 @@ class Basic(commands.Cog):
 
         await player.set_pause(True, ctx.author)
         await send_localized_message(ctx, "player.controls.pause.success", ctx.author)
+        if getattr(self.bot, "compact_controller", False):
+            await player.invoke_controller()
 
     @commands.hybrid_command(name='resume', aliases=get_aliases('resume'), description=app_commands.locale_str('Resume the music.', key='basic.resume'))
     @commands.dynamic_cooldown(cooldown_check, commands.BucketType.guild)
@@ -251,6 +253,8 @@ class Basic(commands.Cog):
 
         await player.set_pause(False, ctx.author)
         await send_localized_message(ctx, "player.controls.resume.success", ctx.author)
+        if getattr(self.bot, "compact_controller", False):
+            await player.invoke_controller()
 
     @commands.hybrid_command(name='skip', aliases=get_aliases('skip'), description=app_commands.locale_str('Skip to the next song, or to a specific position.', key='basic.skip'))
     @app_commands.describe(index=app_commands.locale_str('Enter the position number you want to skip to.', key='basic.skip.index'))
@@ -415,6 +419,8 @@ class Basic(commands.Cog):
 
         await player.set_repeat(voicelink.LoopType[mode] if mode in voicelink.LoopType.__members__ else voicelink.LoopType.OFF, ctx.author)
         await send_localized_message(ctx, "player.controls.repeat", mode.capitalize())
+        if getattr(self.bot, "compact_controller", False):
+            await player.invoke_controller()
 
     @commands.hybrid_command(name='clear', aliases=get_aliases('clear'), description=app_commands.locale_str('Remove all tracks from the queue or history.', key='basic.clear'))
     @app_commands.describe(queue=app_commands.locale_str('Select the queue you want to clear.', key='basic.clear.queue_param'))

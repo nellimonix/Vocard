@@ -69,7 +69,7 @@ def _progress_bar(bot, elapsed, duration):
 
 def button_settings(bot, action):
     if action == "play-pause":
-        return {"states": {"pause": {"emoji": compact_icon(bot, "pause"), "style": "primary"},
+        return {"states": {"pause": {"emoji": compact_icon(bot, "pause"), "style": "secondary"},
                            "resume": {"emoji": compact_icon(bot, "play"), "style": "primary"}}}
     icon = compact_icon(bot, action)
     if action == "loop":
@@ -92,6 +92,14 @@ def _https_url(value):
 
 def _metadata(value):
     return discord.utils.escape_markdown(discord.utils.escape_mentions(" ".join((value or "").split())[:180]))
+
+
+def _artist_text(track):
+    author = _metadata(track.author)
+    if author and (url := _https_url(track.artist_url)):
+        primary, separator, collaborators = author.partition(", ")
+        return f"[{primary}](<{url}>){separator}{collaborators}"
+    return author
 
 
 def _idle_text(embed, fallback):
@@ -132,8 +140,8 @@ class CompactController(ControllerInteractions, discord.ui.LayoutView):
         title = _metadata(track.title) or "Unknown"
         url = _https_url(track.uri)
         header = discord.ui.TextDisplay(f"### [{title}](<{url}>)" if url else f"### {title}")
-        status = self.player.get_msg("player.playback.nowplayingDesc").splitlines()[0].replace("**", "")
-        artist = _metadata(track.author)
+        status = self.player.get_msg("player.playback.nowplayingDesc").splitlines()[0].replace("**", "").rstrip(":")
+        artist = _artist_text(track)
         lines = [discord.ui.TextDisplay(f"-# {status}"), header]
         if artist:
             lines.append(discord.ui.TextDisplay(artist))

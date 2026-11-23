@@ -47,6 +47,7 @@ class Track:
         "identifier",
         "title",
         "author",
+        "artist_url",
         "uri",
         "source",
         "_search_type",
@@ -67,6 +68,7 @@ class Track:
         info: dict,
         requester: Member,
         search_type: SearchType = None,
+        artist_url: Optional[str] = None,
     ):
         if not search_type:
             search_type = Config().search_platform
@@ -77,6 +79,7 @@ class Track:
         self.identifier: str = info.get("identifier")
         self.title: str = info.get("title", "Unknown")
         self.author: str = info.get("author", "Unknown")
+        self.artist_url = artist_url
         self.uri: str = info.get("uri", "https://discord.com/application-directory/605618911471468554")
         self.source: str = info.get("sourceName", extract(self.uri).domain)
         self._search_type: SearchType = search_type
@@ -91,6 +94,11 @@ class Track:
         self.position: int = info.get("position", 0)
 
         self.end_time: Optional[int] = None
+
+    @classmethod
+    def from_lavalink(cls, data: dict, requester: Member) -> "Track":
+        return cls(track_id=data["encoded"], info=data["info"], requester=requester,
+                   artist_url=(data.get("pluginInfo") or {}).get("artistUrl"))
 
     def __eq__(self, other) -> bool:
         """Checks equality between two tracks."""
@@ -178,7 +186,7 @@ class Playlist:
         self.uri: str = None
 
         self.tracks = [
-            Track(track_id=track["encoded"], info=track["info"], requester=requester)
+            Track.from_lavalink(track, requester)
             for track in tracks
         ]
 

@@ -350,6 +350,8 @@ class Node:
         """
 
         data = await self.send(RequestMethod.GET, f"decodetrack?encodedTrack={identifier}")
+        if "info" in data:
+            return Track.from_lavalink(data, requester)
         return Track(track_id=identifier, info=data, requester=requester)
 
     async def get_tracks(
@@ -388,10 +390,10 @@ class Node:
             return Playlist(playlist_info=data["info"], tracks=data["tracks"], requester=requester)
 
         elif load_type == "search":
-            return [Track(track_id=track["encoded"], info=track["info"], requester=requester) for track in data]
+            return [Track.from_lavalink(track, requester) for track in data]
 
         elif load_type == "track":
-            return [Track(track_id=data["encoded"], info=data["info"], requester=requester)]
+            return [Track.from_lavalink(data, requester)]
 
     async def update_refresh_yt_access_token(self, token: YTToken) -> dict:
         if not self._available:
