@@ -64,32 +64,6 @@ async def nowplay(ctx: commands.Context, player: voicelink.Player):
 
     return await dispatch_message(ctx, embed, view=LinkView(texts[2].format(track.source.title()), track.emoji, track.uri))
 
-async def enqueue_search(ctx, player, query, requester, *, start="0", end="0", ephemeral=False):
-    tracks = await player.get_tracks(query, requester=requester)
-    if not tracks:
-        return await send_localized_message(ctx, "player.errors.noTrackFound", ephemeral=ephemeral)
-
-    try:
-        if isinstance(tracks, voicelink.Playlist):
-            index = await player.add_track(tracks.tracks, start_time=format_to_ms(start), end_time=format_to_ms(end))
-            await send_localized_message(ctx, "player.playback.playlistLoad", tracks.name, index, ephemeral=ephemeral)
-        else:
-            position = await player.add_track(tracks[0], start_time=format_to_ms(start), end_time=format_to_ms(end))
-            texts = await LangHandler.get_lang(ctx.guild.id, "common.status.live", "player.playback.trackLoadPos", "player.playback.trackLoad")
-            stream_content = f"`{texts[0]}`" if tracks[0].is_stream else ""
-            additional_content = texts[1] if position >= 1 and player.is_playing else texts[2]
-
-            await dispatch_message(
-                ctx,
-                stream_content + additional_content,
-                tracks[0].title, tracks[0].uri, tracks[0].author, tracks[0].formatted_length,
-                position if position >= 1 and player.is_playing else None, ephemeral=ephemeral
-            )
-    finally:
-        if not player.is_playing:
-            await player.do_next()
-
-
 class Basic(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
@@ -161,7 +135,29 @@ class Basic(commands.Cog):
         if ctx.interaction and not ctx.interaction.response.is_done():
             await ctx.interaction.response.defer()
 
-        await enqueue_search(ctx, player, query, ctx.author, start=start, end=end)
+        tracks = await player.get_tracks(query, requester=ctx.author)
+        if not tracks:
+            return await send_localized_message(ctx, "player.errors.noTrackFound")
+
+        try:
+            if isinstance(tracks, voicelink.Playlist):
+                index = await player.add_track(tracks.tracks, start_time=format_to_ms(start), end_time=format_to_ms(end))
+                await send_localized_message(ctx, "player.playback.playlistLoad", tracks.name, index)
+            else:
+                position = await player.add_track(tracks[0], start_time=format_to_ms(start), end_time=format_to_ms(end))
+                texts = await LangHandler.get_lang(ctx.guild.id, "common.status.live", "player.playback.trackLoadPos", "player.playback.trackLoad")
+                stream_content = f"`{texts[0]}`" if tracks[0].is_stream else ""
+                additional_content = texts[1] if position >= 1 and player.is_playing else texts[2]
+
+                await dispatch_message(
+                    ctx,
+                    stream_content + additional_content,
+                    tracks[0].title, tracks[0].uri, tracks[0].author, tracks[0].formatted_length,
+                    position if position >= 1 and player.is_playing else None
+                )
+        finally:
+            if not player.is_playing:
+                await player.do_next()
 
     @commands.dynamic_cooldown(cooldown_check, commands.BucketType.guild)
     async def _play(self, interaction: discord.Interaction, message: discord.Message):

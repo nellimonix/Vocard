@@ -2,24 +2,21 @@ from urllib.parse import urlsplit
 
 import discord
 
-from ..config import Config
-from ..exceptions import VoicelinkException
-from ..language import LangHandler
-from ..utils import dispatch_message, format_ms, send_localized_message
-from .controller import ADD_TRACK_ID, BUTTON_TYPE, ControlButton, ControllerInteractions, StopPlayback
+from ..utils import format_ms
+from .controller import BUTTON_TYPE, ControllerInteractions, StopPlayback
 
 
 ICON_ROWS = (
-    ("back", "rewind", "play-pause", "forward", "skip"),
-    ("volumedown", "volumeup", "shuffle", "loop"),
-    ("queue", "add-track", "lyrics", "stop", "leave"),
+    ("shuffle", "volumedown", "volume-readout", "volumeup", "loop"),
+    ("rewind", "back", "play-pause", "skip", "forward"),
+    ("add-track", "queue", "lyrics", "stop", "leave"),
 )
 ICONS = {
     "back": ("ym_back_v2", 1574291224532357150, "⏮️"),
     "rewind": ("ym_forward_back_v2", 1574291239279534192, "⏪"),
     "pause": ("ym_pause_v2", 1574291222640594944, "⏸️"),
     "play": ("ym_play_v2", 1574292346986561679, "▶️"),
-    "forward": ("ym_forward_next_v2", 1574291233734398032, "⏩"),
+    "forward": ("ym_forward_next30_v2", 1574295953220042752, "⏩"),
     "skip": ("ym_next_v2", 1574291226331578409, "⏭️"),
     "volumedown": ("ym_volume_down_v2", 1574291243880419429, "🔉"),
     "volumeup": ("ym_volume_up_v2", 1574291245667451022, "🔊"),
@@ -33,47 +30,10 @@ ICONS = {
 }
 
 
-class AddTrackModal(discord.ui.Modal):
-    def __init__(self, player, locale):
-        super().__init__(title="/play")
-        self.player = player
-        key = "basic.play.query"
-        fallback = LangHandler._local_langs.get("EN-US", {}).get(key, "Enter a query or a searchable link.")
-        label = LangHandler._local_langs.get(str(locale).upper(), {}).get(key, fallback)
-        self.query = discord.ui.TextInput(label=label if len(label) <= 45 else fallback, max_length=1024)
-        self.add_item(self.query)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        from cogs.basic import enqueue_search
-
-        player = self.player
-        if player._closing or not player.channel or interaction.guild.voice_client is not player:
-            return await send_localized_message(interaction, "player.errors.noPlayer", ephemeral=True)
-        if interaction.user.id not in Config().bot_access_user and not player.is_user_join(interaction.user):
-            return await send_localized_message(interaction, "voice.connection.notInChannel", interaction.user.mention,
-                                                player.channel.mention, ephemeral=True)
-        query = self.query.value.strip()
-        if not query:
-            return await send_localized_message(interaction, "player.errors.noTrackFound", ephemeral=True)
-        await interaction.response.defer(ephemeral=True)
-        try:
-            was_playing = player.is_playing
-            await enqueue_search(interaction, player, query, interaction.user, ephemeral=True)
-            if was_playing and player.is_playing:
-                await player.invoke_controller()
-        except VoicelinkException as error:
-            await dispatch_message(interaction, str(error), ephemeral=True)
-
-
-class OpenAddTrack(ControlButton):
-    async def callback(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(AddTrackModal(self.player, interaction.locale))
-
-
 def compact_icon(bot, action):
-    name, emoji_id, fallback = ICONS[action]
-    if emoji_id in getattr(bot, "compact_app_emojis", ()):
-        return f"<:{name}:{emoji_id}>"
+    name, _, fallback = ICONS[action]
+    if registered := getattr(bot, "compact_app_emojis", {}).get(name):
+        return f"<:{name}:{registered}>"
     return fallback
 
 
@@ -85,7 +45,7 @@ def button_settings(bot, action):
     if action == "loop":
         return {"states": {state: {"emoji": icon, "style": style} for state, style in
                            (("off", "secondary"), ("track", "primary"), ("queue", "success"))}}
-    return {"emoji": icon, "style": {"leave": "danger", "add-track": "success"}.get(action, "secondary")}
+    return {"emoji": icon, "style": "danger" if action == "leave" else "secondary"}
 
 
 def _https_url(value):
@@ -134,9 +94,10 @@ class CompactController(ControllerInteractions, discord.ui.LayoutView):
             return
         title = _metadata(track.title) or "Unknown"
         url = _https_url(track.uri)
-        header = discord.ui.TextDisplay(f"**[{title}](<{url}>)**" if url else f"**{title}**")
+        header = discord.ui.TextDisplay(f"### [{title}](<{url}>)" if url else f"### {title}")
+        status = self.player.get_msg("player.playback.nowplayingDesc").splitlines()[0].replace("**", "")
         artist = _metadata(track.author)
-        lines = [header]
+        lines = [discord.ui.TextDisplay(f"-# {status}"), header]
         if artist:
             lines.append(discord.ui.TextDisplay(artist))
         if artwork := _https_url(track.thumbnail):
@@ -149,9 +110,17 @@ class CompactController(ControllerInteractions, discord.ui.LayoutView):
         for names in ICON_ROWS:
             row = discord.ui.ActionRow()
             for name in names:
-                button = {"stop": StopPlayback, "add-track": OpenAddTrack}.get(name) or BUTTON_TYPE[name]
-                kwargs = {"custom_id": ADD_TRACK_ID} if name == "add-track" else {}
-                item = button(player=self.player, btn_data=button_settings(self.player.bot, name), icon_only=True, **kwargs)
+                if name == "volume-readout":
+                    self.volume_readout = discord.ui.Button(label=f"{self.player.volume}%", disabled=True,
+                                                            style=discord.ButtonStyle.secondary)
+                    row.add_item(self.volume_readout)
+                    continue
+                if name == "add-track":
+                    row.add_item(discord.ui.Button(emoji=compact_icon(self.player.bot, name), disabled=True,
+                                                   style=discord.ButtonStyle.success))
+                    continue
+                button = StopPlayback if name == "stop" else BUTTON_TYPE[name]
+                item = button(player=self.player, btn_data=button_settings(self.player.bot, name), icon_only=True)
                 if name in ("forward", "rewind") and (not self.player.current or not self.player.current.is_seekable):
                     item.disabled = True
                 row.add_item(item)
@@ -159,7 +128,7 @@ class CompactController(ControllerInteractions, discord.ui.LayoutView):
 
     def readout_text(self, position=None):
         track = self.player.current
-        entries = [f"🔊 {self.player.volume}%", f"📋 {self.player.queue.count}"]
+        entries = [f"{compact_icon(self.player.bot, 'queue')} {self.player.queue.count}"]
         if track is None:
             return "-# " + "  ·  ".join(entries)
         if track.source:
@@ -171,11 +140,12 @@ class CompactController(ControllerInteractions, discord.ui.LayoutView):
             times = self.player.get_msg("common.status.live")
         elif track.length:
             elapsed = min(track.length, elapsed)
-            bars = round(12 * elapsed / track.length)
-            times = f"`{format_ms(elapsed)}`  {'━' * bars}{'─' * (12 - bars)}  `{format_ms(track.length)}`"
+            bars = round(14 * elapsed / track.length)
+            times = f"{format_ms(elapsed)}  {'▰' * bars}{'▱' * (14 - bars)}  {format_ms(track.length)}"
         else:
             times = f"`{format_ms(elapsed)}`"
         return times + "\n-# " + "  ·  ".join(entries)
 
     def refresh_readout(self, position=None):
         self.readout.content = self.readout_text(position)
+        self.volume_readout.label = f"{self.player.volume}%"

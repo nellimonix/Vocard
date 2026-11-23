@@ -73,7 +73,7 @@ class Vocard(commands.AutoShardedBot):
 
         self.ipc_client: IPCClient
         self.compact_controller = True
-        self.compact_app_emojis: set[int] = set()
+        self.compact_app_emojis: dict[str, int] = {}
 
     async def on_message(self, message: discord.Message, /) -> None:
         # Ignore messages from bots or DMs
@@ -117,7 +117,7 @@ class Vocard(commands.AutoShardedBot):
     async def setup_hook(self) -> None:
         if self.application_id is not None:
             try:
-                self.compact_app_emojis = {emoji.id for emoji in await self.fetch_application_emojis()}
+                self.compact_app_emojis = {emoji.name: emoji.id for emoji in await self.fetch_application_emojis()}
             except discord.HTTPException:
                 func.logger.warning("Could not load application emojis for the compact controller")
 

@@ -33,8 +33,6 @@ from ..language import LangHandler
 from ..mongodb import MongoDBHandler
 from ..lyrics import split_lyrics
 
-ADD_TRACK_ID = "ym:compact:add"
-
 def key(interaction: discord.Interaction):
     return interaction.user
 
@@ -239,7 +237,8 @@ class Stop(ControlButton):
 
 class StopPlayback(ControlButton):
     def __init__(self, **kwargs):
-        super().__init__(disabled=kwargs["player"].current is None, **kwargs)
+        player = kwargs["player"]
+        super().__init__(disabled=player.current is None and player.queue.is_empty, **kwargs)
 
     async def callback(self, interaction: discord.Interaction):
         if not self.player.is_privileged(interaction.user):
@@ -390,7 +389,7 @@ class Forward(ControlButton):
         if not self.player.current:
             return await self.send(interaction, 'player.errors.noTrackPlaying', ephemeral=True)
 
-        position = int(self.player.position + 10000)
+        position = int(self.player.position + (30000 if self.icon_only else 10000))
         if self.icon_only:
             position = min(position, self.player.current.length)
 
@@ -414,7 +413,7 @@ class Rewind(ControlButton):
         if not self.player.current:
             return await self.send(interaction, 'player.errors.noTrackPlaying', ephemeral=True)
 
-        position = 0 if (value := int(self.player.position - 30000)) <= 0 else value
+        position = max(0, int(self.player.position - (10000 if self.icon_only else 30000)))
 
         await self.player.seek(position)
         if self.icon_only:
@@ -550,8 +549,7 @@ class ControllerInteractions:
                 pass
             return False
 
-        custom_id = (getattr(interaction, "data", None) or {}).get("custom_id")
-        if not interaction.response.is_done() and custom_id != ADD_TRACK_ID:
+        if not interaction.response.is_done():
             await interaction.response.defer()
 
         if not self.player.node._available:

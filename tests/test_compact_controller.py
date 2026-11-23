@@ -1,19 +1,19 @@
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, call
 
 import _bootstrap
 import discord
 from discord.http import handle_message_parameters
 
-from voicelink import Config, Player
+from voicelink import Player
 from voicelink.enums import LoopType
-from voicelink.views.compact_controller import CompactController, ICON_ROWS, ICONS
-from voicelink.views.controller import ADD_TRACK_ID, Stop, StopPlayback
+from voicelink.views.compact_controller import CompactController, ICONS
+from voicelink.views.controller import Forward, Rewind, Stop, StopPlayback
 
 
 def sample_player(*, custom=True):
-    emoji_ids = {item[1] for item in ICONS.values()} if custom else set()
+    emoji_ids = {name: emoji_id for name, emoji_id, _ in ICONS.values()} if custom else {}
     track = SimpleNamespace(title="Testing", author="Artist", uri="https://music.yandex.com/track/1",
                             thumbnail="https://avatars.yandex.net/image", source="yandexmusic",
                             requester=None, length=180000, is_stream=False, is_seekable=True)
@@ -35,9 +35,21 @@ class CompactControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(items[0]["accessory"]["type"], 11)
         self.assertNotIn(12, [node["type"] for node in items])
         rows = [node["components"] for node in items if node["type"] == 1]
-        self.assertEqual([len(row) for row in rows], [len(row) for row in ICON_ROWS])
-        self.assertTrue(all(not button.get("label") for row in rows for button in row))
-        self.assertEqual(int(rows[0][2]["emoji"]["id"]), ICONS["pause"][1])
+        self.assertEqual([len(row) for row in rows], [5, 5, 5])
+        roles = (("shuffle", "volumedown", None, "volumeup", "loop"),
+                 ("rewind", "back", "pause", "skip", "forward"),
+                 ("add-track", "queue", "lyrics", "stop", "leave"))
+        for row, actions in zip(rows, roles):
+            for button, action in zip(row, actions):
+                if action:
+                    self.assertFalse(button.get("label"))
+                    self.assertEqual(int(button["emoji"]["id"]), ICONS[action][1])
+        self.assertEqual(rows[0][2]["label"], "100%")
+        self.assertTrue(rows[0][2]["disabled"])
+        self.assertEqual(rows[2][0]["style"], discord.ButtonStyle.success.value)
+        self.assertTrue(rows[2][0]["disabled"])
+        self.assertEqual(rows[2][4]["style"], discord.ButtonStyle.danger.value)
+        self.assertEqual(int(rows[1][4]["emoji"]["id"]), 1574295953220042752)
         self.assertIsInstance(view.frame.children[-1].children[-2], StopPlayback)
         self.assertIsInstance(view.frame.children[-1].children[-1], Stop)
         self.assertEqual(view.frame.children[-1].children[-3].emoji.id, ICONS["lyrics"][1])
@@ -45,33 +57,47 @@ class CompactControllerTests(unittest.IsolatedAsyncioTestCase):
         player.volume = 60
         view.refresh_readout(120000)
         self.assertIn("02:00", view.readout.content)
-        self.assertIn("60%", view.readout.content)
+        self.assertNotIn("60%", view.readout.content)
+        self.assertEqual(view.volume_readout.label, "60%")
 
     async def test_non_owner_app_falls_back_to_unicode(self):
         player = sample_player(custom=False)
         player.is_paused = True
         view = CompactController(player, discord.Embed())
-        row = next(item for item in view.frame.children if isinstance(item, discord.ui.ActionRow))
-        self.assertEqual(row.children[2].emoji.name, ICONS["play"][2])
+        rows = [item for item in view.frame.children if isinstance(item, discord.ui.ActionRow)]
+        self.assertEqual(rows[1].children[2].emoji.name, ICONS["play"][2])
 
-    async def test_add_button_can_open_a_modal_without_prior_defer(self):
+    async def test_forward_uses_the_emoji_registered_in_the_current_application(self):
         player = sample_player()
-        player.channel = object()
-        player.node = SimpleNamespace(_available=True)
+        player.bot.compact_app_emojis[ICONS["forward"][0]] = 1574295953220042753
         view = CompactController(player, discord.Embed())
-        interaction = SimpleNamespace(data={"custom_id": ADD_TRACK_ID}, user=SimpleNamespace(id=55),
-                                      response=SimpleNamespace(is_done=Mock(return_value=False), defer=AsyncMock()))
-        with patch.object(Config(), "bot_access_user", [55]):
-            self.assertTrue(await view.interaction_check(interaction))
-        interaction.response.defer.assert_not_awaited()
+        rows = [item for item in view.frame.children if isinstance(item, discord.ui.ActionRow)]
+        self.assertEqual(rows[1].children[4].emoji.id, 1574295953220042753)
+
+    async def test_compact_seek_intervals_and_track_bounds(self):
+        player = sample_player()
+        player.is_privileged = Mock(return_value=True)
+        player.seek = AsyncMock()
+        interaction = SimpleNamespace(user=object(), edit_original_response=AsyncMock())
+        forward = Forward(player=player, btn_data={"emoji": ICONS["forward"][2]}, icon_only=True)
+        rewind = Rewind(player=player, btn_data={"emoji": ICONS["rewind"][2]}, icon_only=True)
+        await forward.callback(interaction)
+        await rewind.callback(interaction)
+        player.position = 175000
+        await forward.callback(interaction)
+        player.position = 5000
+        await rewind.callback(interaction)
+        self.assertEqual(player.seek.await_args_list, [call(120000), call(80000), call(180000), call(0)])
 
     async def test_explicit_stop_holds_playback_without_a_disconnect(self):
         from cogs.listeners import Listeners
 
-        player = SimpleNamespace(current=object(), stop=AsyncMock(), invoke_controller=AsyncMock(),
+        queue = SimpleNamespace(is_empty=False, clear=Mock())
+        player = SimpleNamespace(current=object(), queue=queue, stop=AsyncMock(), invoke_controller=AsyncMock(),
                                  update_voice_status=AsyncMock(), do_next=AsyncMock(), playback_stopped=False)
         await Player.stop_playback(player)
         player.stop.assert_awaited_once_with(unpause=True)
+        player.queue.clear.assert_called_once_with()
         self.assertTrue(player.playback_stopped)
         await Listeners.on_voicelink_track_end(None, player, object(), "stopped")
         player.do_next.assert_not_awaited()

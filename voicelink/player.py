@@ -641,16 +641,18 @@ class Player(VoiceProtocol):
 
     async def stop_playback(self):
         track = self.current
-        if track is None:
+        if track is None and self.queue.is_empty:
             return
         self.playback_stopped = True
         try:
-            await self.stop(unpause=True)
+            if track is not None:
+                await self.stop(unpause=True)
         except (Exception, asyncio.CancelledError):
             self.playback_stopped = False
             if self._current is None:
                 self._current = track
             raise
+        self.queue.clear()
         await self.invoke_controller()
         await self.update_voice_status()
 
