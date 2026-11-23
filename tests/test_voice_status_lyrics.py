@@ -382,6 +382,20 @@ class PlayerDisconnectTests(unittest.IsolatedAsyncioTestCase):
             await self.player.add_track(object())
         self.assertTrue(self.player.queue.is_empty)
 
+    async def test_queued_playback_waits_for_lavalink_voice_registration(self):
+        track = SimpleNamespace(position=0, requester=SimpleNamespace(bot=True))
+        self.player.queue = SimpleNamespace(is_empty=False, get=Mock(return_value=track))
+        self.player._ipc_client = SimpleNamespace(_is_connected=False)
+        self.player.play = AsyncMock()
+        self.player.invoke_controller = AsyncMock()
+        self.player.update_voice_status = AsyncMock()
+        pending = asyncio.create_task(self.player.do_next())
+        await asyncio.sleep(0)
+        self.player.queue.get.assert_not_called()
+        self.player._voice_ready.set()
+        await pending
+        self.player.play.assert_awaited_once_with(track, start=0)
+
 
 class LyricsPaginationTests(unittest.TestCase):
     def test_single_line_without_final_newline_is_preserved(self):

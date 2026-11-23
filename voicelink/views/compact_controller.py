@@ -30,12 +30,17 @@ ICONS = {
 }
 READOUT_ICONS = {
     "ym_yamusic": 1374258185359196191,
+    "ym_vkmusic": 1374258169722703934,
     "ym_start_100_v2": 1574308845839327282,
     "ym_mid_100_v2": 1574308847638679592,
     "ym_end_100_v2": 1574308849337376798,
     "ym_start_0_v2": 1574308983395590296,
     "ym_mid_0_v2": 1574308985421566013,
     "ym_end_0_v2": 1574308987183046798,
+}
+SOURCE_LABELS = {
+    "yandexmusic": ("ym_yamusic", "Яндекс Музыка"),
+    "vkmusic": ("ym_vkmusic", "ВК Музыка"),
 }
 PROGRESS_SEGMENTS = ("start", *("mid",) * 8, "end")
 
@@ -104,12 +109,14 @@ class CompactController(ControllerInteractions, discord.ui.LayoutView):
     def __init__(self, player, embed):
         super().__init__(timeout=None)
         self.bind_player(player)
+        self.track = player.current
+        self.next_progress_at = 0.0
         self.frame = discord.ui.Container()
         self.add_item(self.frame)
         self._add_track_header(embed)
         self.progress = None
-        if track := self.player.current:
-            self.progress = discord.ui.TextDisplay(self.progress_text(track))
+        if self.track is not None:
+            self.progress = discord.ui.TextDisplay(self.progress_text(self.track))
             self.frame.add_item(self.progress)
             self.frame.add_item(discord.ui.Separator(visible=False))
         self.metadata = discord.ui.TextDisplay(self.metadata_text())
@@ -161,14 +168,15 @@ class CompactController(ControllerInteractions, discord.ui.LayoutView):
         entries = [f"{self.player.queue.count} в очереди"]
         if track is None:
             return "-# " + entries[0]
-        if track.source == "yandexmusic":
-            icon = _application_icon(self.player.bot, "ym_yamusic")
-            entries.insert(0, f"{icon} Яндекс Музыка".lstrip())
+        if track.source in SOURCE_LABELS:
+            icon_name, label = SOURCE_LABELS[track.source]
+            icon = _application_icon(self.player.bot, icon_name)
+            entries.insert(0, f"{icon} {label}".lstrip())
         elif track.source:
             entries.insert(0, _metadata(track.source))
         if track.requester:
             entries.append(f"Добавлен: {track.requester.mention}")
-        return "-# " + "  ·  ".join(entries)
+        return "-# " + "  •  ".join(entries)
 
     def progress_text(self, track, position=None):
         elapsed = max(0, self.player.position if position is None else position)

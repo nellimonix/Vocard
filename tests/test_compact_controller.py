@@ -83,7 +83,32 @@ class CompactControllerTests(unittest.IsolatedAsyncioTestCase):
         for size in (0, 1, 2, 10):
             player.queue.count = size
             metadata = view.metadata_text()
-            self.assertEqual(metadata, f"-# <:ym_yamusic:1234567> Яндекс Музыка  ·  {size} в очереди  ·  Добавлен: <@123456>")
+            self.assertEqual(metadata, f"-# <:ym_yamusic:1234567> Яндекс Музыка  •  {size} в очереди  •  Добавлен: <@123456>")
+        player.current.source = "vkmusic"
+        self.assertEqual(view.metadata_text(), "-# <:ym_vkmusic:1374258169722703934> ВК Музыка  •  10 в очереди  •  Добавлен: <@123456>")
+
+    async def test_progress_refresh_is_throttled_and_does_not_edit_a_replaced_track(self):
+        player = sample_player()
+        view = CompactController(player, discord.Embed())
+        player._controller_view = view
+        player._last_position = 120000
+        player._closing = player._updating = False
+        player._progress_edit_task = None
+        player.controller = SimpleNamespace(edit=AsyncMock())
+        player._edit_controller_progress = Player._edit_controller_progress.__get__(player)
+
+        Player._schedule_controller_progress(player)
+        await player._progress_edit_task
+        self.assertIn("02:00", view.progress.content)
+        self.assertEqual(player.controller.edit.await_args.kwargs["view"], view)
+
+        player._last_position = 125000
+        Player._schedule_controller_progress(player)
+        self.assertIn("02:00", view.progress.content)
+        player.current = sample_player().current
+        view.next_progress_at = 0
+        Player._schedule_controller_progress(player)
+        player.controller.edit.assert_awaited_once()
 
     async def test_progress_bar_uses_custom_start_middle_and_end_segments(self):
         player = sample_player()

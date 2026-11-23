@@ -69,27 +69,40 @@ class AutocompleteTests(unittest.IsolatedAsyncioTestCase):
 
 
 class VoiceTests(unittest.IsolatedAsyncioTestCase):
+    def voice_player(self, **kwargs):
+        return SimpleNamespace(_voice_update_lock=asyncio.Lock(), _voice_ready=asyncio.Event(),
+                               _voice_dispatched=None, node=object(), **kwargs)
+
     async def test_incomplete_voice_updates_are_skipped(self):
-        player = SimpleNamespace(_closing=False, channel=SimpleNamespace(id=42), send=AsyncMock(), _logger=logging.getLogger("test"))
+        player = self.voice_player(_closing=False, channel=SimpleNamespace(id=42), send=AsyncMock(), _logger=logging.getLogger("test"))
         for state in [{}, {"sessionId": "session"}, {"sessionId": "session", "event": {"token": "token", "endpoint": None}}]:
             player._voice_state = state
             await Player._dispatch_voice_update(player)
         player.send.assert_not_awaited()
 
     async def test_valid_voice_update_accepts_additional_state_fields(self):
-        player = SimpleNamespace(_closing=False, channel=SimpleNamespace(id=42), _voice_state={"sessionId": "session", "event": {"token": "token", "endpoint": "voice.example"}, "extra": True}, send=AsyncMock(), _logger=logging.getLogger("test"))
+        player = self.voice_player(_closing=False, channel=SimpleNamespace(id=42), _voice_state={"sessionId": "session", "event": {"token": "token", "endpoint": "voice.example"}, "extra": True}, send=AsyncMock(), _logger=logging.getLogger("test"))
         await Player._dispatch_voice_update(player)
         player.send.assert_awaited_once_with(method=RequestMethod.PATCH, data={"voice": {"token": "token", "endpoint": "voice.example", "sessionId": "session", "channelId": "42"}})
 
     async def test_voice_event_order_does_not_block_connection(self):
         for server_first in [True, False]:
             channel = SimpleNamespace(id=42)
-            player = SimpleNamespace(_closing=False, channel=channel, guild=SimpleNamespace(get_channel=Mock(return_value=channel)), _voice_state={}, send=AsyncMock(), _logger=logging.getLogger("test"))
+            player = self.voice_player(_closing=False, channel=channel, guild=SimpleNamespace(get_channel=Mock(return_value=channel)), _voice_state={}, send=AsyncMock(), _logger=logging.getLogger("test"))
             player._dispatch_voice_update = lambda state=None: Player._dispatch_voice_update(player, state)
             updates = [(Player.on_voice_server_update, {"token": "token", "endpoint": "voice.example"}), (Player.on_voice_state_update, {"session_id": "session", "channel_id": "42"})]
             for method, payload in updates if server_first else reversed(updates):
                 await method(player, payload)
             player.send.assert_awaited_once()
+
+    async def test_voice_patch_retries_timeout_and_deduplicates_an_acknowledged_update(self):
+        state = {"sessionId": "session", "event": {"token": "token", "endpoint": "voice.example"}}
+        player = self.voice_player(_closing=False, channel=SimpleNamespace(id=42), _voice_state=state,
+                                   send=AsyncMock(side_effect=[TimeoutError(), {}]), _logger=Mock())
+        await Player._dispatch_voice_update(player)
+        self.assertTrue(player._voice_ready.is_set())
+        await Player._dispatch_voice_update(player)
+        self.assertEqual(player.send.await_count, 2)
 
     async def test_interaction_connect_uses_client_and_explicit_channel(self):
         interaction = Mock(spec=discord.Interaction)

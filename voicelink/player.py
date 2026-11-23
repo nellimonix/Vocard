@@ -31,6 +31,7 @@ from typing import Any, Dict, List, Optional, Union, Tuple, TYPE_CHECKING
 
 from aiohttp import ClientError
 from discord import (
+    AllowedMentions,
     Client,
     Guild,
     VoiceChannel,
@@ -165,14 +166,19 @@ class Player(VoiceProtocol):
 
         self._voice_state: dict = {}
         self._voice_left = asyncio.Event()
+        self._voice_ready = asyncio.Event()
+        self._voice_update_lock = asyncio.Lock()
+        self._voice_dispatched = None
 
         self.controller: Union[Message, PartialMessage] = None
         self._controller_view: Optional[InteractiveController] = None
+        self._progress_edit_task: Optional[asyncio.Task[None]] = None
         self._controller_retry_at: float = 0.0
         self._controller_retry_channel = None
         self._closing = False
         self._disconnect_task: Optional[asyncio.Task[None]] = None
         self._request_lock = asyncio.Lock()
+        self._advance_lock = asyncio.Lock()
         self._updating: bool = False
 
         self.pause_votes = set()
@@ -376,6 +382,9 @@ class Player(VoiceProtocol):
         self._ping = state.get("ping")
         self._logger.debug(f"Player in {self.guild.name}({self.guild.id}) update state with data {data}")
 
+        if self._is_connected:
+            self._schedule_controller_progress()
+
         if self.is_ipc_connected:
             await self.send_ws({
                 "op": "playerUpdate",
@@ -386,23 +395,40 @@ class Player(VoiceProtocol):
 
     async def _dispatch_voice_update(self, voice_data: Dict[str, Any] = None):
         """Dispatches a voice update to the node."""
-        state = voice_data or self._voice_state
-        event = state.get("event") or {}
-        if self._closing or not self.channel or not state.get("sessionId") or not event.get("token") or not event.get("endpoint"):
-            return
+        async with self._voice_update_lock:
+            state = voice_data or self._voice_state
+            event = state.get("event") or {}
+            if self._closing or not self.channel or not state.get("sessionId") or not event.get("token") or not event.get("endpoint"):
+                return
 
-        data = {
-            "token": event['token'],
-            "endpoint": event['endpoint'],
-            "sessionId": state['sessionId'],
-            "channelId": str(self.channel.id),
-        }
-
-        await self.send(method=RequestMethod.PATCH, data={"voice": data})
-        self._logger.debug("Dispatched voice update to %s", event['endpoint'])
+            data = {
+                "token": event["token"],
+                "endpoint": event["endpoint"],
+                "sessionId": state["sessionId"],
+                "channelId": str(self.channel.id),
+            }
+            voice = (self.node, data)
+            if self._voice_dispatched == voice:
+                return
+            self._voice_ready.clear()
+            for attempt in range(2):
+                if self._closing:
+                    return
+                try:
+                    await self.send(method=RequestMethod.PATCH, data={"voice": data})
+                except (ClientError, TimeoutError):
+                    if attempt:
+                        self._logger.warning("Lavalink did not acknowledge the voice update")
+                else:
+                    self._voice_dispatched = voice
+                    self._voice_ready.set()
+                    return
 
     async def on_voice_server_update(self, data: dict):
         """Handles a voice server update event."""
+        if not data.get("endpoint"):
+            self._voice_dispatched = None
+            self._voice_ready.clear()
         self._voice_state.update({"event": data})
         await self._dispatch_voice_update(self._voice_state)
 
@@ -458,8 +484,15 @@ class Player(VoiceProtocol):
             if not self.accepts_tracks:
                 return
 
-        if not self.guild.me.voice:
-            await self.connect(timeout=0.0, reconnect=True)
+        if not self.queue.is_empty:
+            try:
+                async with asyncio.timeout(25):
+                    await self._voice_ready.wait()
+            except TimeoutError:
+                self._logger.warning("Playback is waiting for a Lavalink voice connection")
+                return
+            if not self.accepts_tracks or self._current or self.is_playing:
+                return
 
         self.pause_votes.clear()
         self.resume_votes.clear()
@@ -468,7 +501,17 @@ class Player(VoiceProtocol):
         self.shuffle_votes.clear()
         self.stop_votes.clear()
 
-        track = self.queue.get()
+        try:
+            async with self._advance_lock:
+                if not self.accepts_tracks or self._current or self.is_playing:
+                    return
+                track = self.queue.get()
+                if track:
+                    await self.play(track, start=track.position)
+        except Exception as e:
+            self._logger.error(f"Something went wrong while playing music in {self.guild.name}({self.guild.id})", exc_info=e)
+            await asyncio.sleep(5)
+            return await self.do_next()
 
         if not track:
             if self.autoplay and await self.get_recommendations():
@@ -476,13 +519,6 @@ class Player(VoiceProtocol):
             if self.queue.is_empty:
                 self._schedule_inactive_cleanup_timer()
         else:
-            try:
-                await self.play(track, start=track.position)
-            except Exception as e:
-                self._logger.error(f"Something went wrong while playing music in {self.guild.name}({self.guild.id})", exc_info=e)
-                await asyncio.sleep(5)
-                return await self.do_next()
-
             if not track.requester.bot:
                 self._bot.loop.create_task(MongoDBHandler.update_user(track.requester.id, {
                     "$push": {"history": {"$each": [track.track_id], "$slice": -25}}
@@ -505,6 +541,34 @@ class Player(VoiceProtocol):
         if view is not None:
             view.stop()
 
+    def _schedule_controller_progress(self):
+        view = self._controller_view
+        track = self.current
+        now = time.monotonic()
+        if (
+            self._closing or self._updating or self.is_paused or track is None or track.is_stream
+            or not isinstance(view, CompactController) or view.track is not track or not self.controller
+            or view.is_finished() or now < view.next_progress_at
+            or (self._progress_edit_task is not None and not self._progress_edit_task.done())
+        ):
+            return
+        content = view.progress_text(track, self._last_position)
+        if content == view.progress.content:
+            return
+        view.next_progress_at = now + 10
+        self._progress_edit_task = asyncio.create_task(self._edit_controller_progress(self.controller, view, content))
+
+    async def _edit_controller_progress(self, message, view, content):
+        previous = view.progress.content
+        view.progress.content = content
+        try:
+            async with asyncio.timeout(5):
+                await message.edit(view=view, allowed_mentions=AllowedMentions.none())
+        except (ClientError, errors.HTTPException, TimeoutError):
+            if view.progress.content == content:
+                view.progress.content = previous
+            view.next_progress_at = time.monotonic() + 60
+
     async def invoke_controller(self):
         """Sends or updates the music controller message in the designated channel."""
         if getattr(self, "_closing", False) or not self.settings.get('controller', True) or self._updating or not self.channel:
@@ -519,6 +583,10 @@ class Player(VoiceProtocol):
         view = None
 
         try:
+            if task := getattr(self, "_progress_edit_task", None):
+                await asyncio.shield(task)
+            if self._closing:
+                return
             embed = self.build_embed(self.current)
             if getattr(getattr(self, "_bot", None), "compact_controller", False):
                 view = CompactController(self, embed)
@@ -608,6 +676,8 @@ class Player(VoiceProtocol):
         if self.controller is None:
             return
         try:
+            if task := getattr(self, "_progress_edit_task", None):
+                await asyncio.shield(task)
             async with asyncio.timeout(5):
                 if self.controller.id == self.settings.get("music_request_channel", {}).get("controller_msg_id"):
                     if self.guild.voice_client is not None:
@@ -685,6 +755,7 @@ class Player(VoiceProtocol):
     async def disconnect(self, *, force: bool = False):
         """Disconnects the player from voice."""
         self._closing = True
+        self._voice_ready.set()
         if self._disconnect_task is None:
             self._disconnect_task = asyncio.create_task(self._disconnect())
         await asyncio.shield(self._disconnect_task)
