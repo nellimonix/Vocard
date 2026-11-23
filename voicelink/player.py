@@ -66,6 +66,7 @@ from .queue import Queue, QUEUE_TYPES
 from .mongodb import MongoDBHandler
 from .language import LangHandler
 from .views import InteractiveController
+from .views.compact_controller import CompactController, CompactIdle
 from .utils import format_ms, dispatch_message
 from .voice_status import VoiceStatusUpdater
 
@@ -144,6 +145,7 @@ class Player(VoiceProtocol):
         self._current: Optional[Track] = None
         self._filters: Filters = Filters()
         self._paused: bool = False
+        self.playback_stopped = False
         self._is_connected: bool = False
         self._ping: float = 0.0
         self._track_is_stuck = False
@@ -495,20 +497,28 @@ class Player(VoiceProtocol):
         view = None
 
         try:
-            embed, view = self.build_embed(self.current), InteractiveController(self)
+            embed = self.build_embed(self.current)
+            if getattr(getattr(self, "_bot", None), "compact_controller", False):
+                view = CompactController(self, embed)
+                content = None
+                edit = {"content": None, "embed": None, "attachments": [], "view": view}
+            else:
+                view = InteractiveController(self)
+                content = embed
+                edit = {"embed": embed, "view": view}
             self._stop_controller_view()
             if not self.controller:
                 if request_channel_data := self.settings.get("music_request_channel"):
                     if channel := self.bot.get_channel(request_channel_data.get("text_channel_id")):
                         try:
                             self.controller = await channel.fetch_message(request_channel_data.get("controller_msg_id"))
-                            await self.controller.edit(embed=embed, view=view)
+                            await self.controller.edit(**edit)
                         except errors.NotFound:
                             self.controller = None
 
                 # Send a new controller message if none exists
                 if not self.controller:
-                    self.controller = await dispatch_message(self.context, content=embed, view=view, delete_after=None, requires_fetch=True)
+                    self.controller = await dispatch_message(self.context, content=content, view=view, delete_after=None, requires_fetch=True)
 
             elif not await self.is_position_fresh():
                 try:
@@ -516,13 +526,13 @@ class Player(VoiceProtocol):
                 except errors.NotFound:
                     self.controller = None
 
-                self.controller = await dispatch_message(self.context, content=embed, view=view, delete_after=None, requires_fetch=True)
+                self.controller = await dispatch_message(self.context, content=content, view=view, delete_after=None, requires_fetch=True)
 
             else:
                 try:
-                    await self.controller.edit(embed=embed, view=view)
+                    await self.controller.edit(**edit)
                 except errors.NotFound:
-                    self.controller = await dispatch_message(self.context, content=embed, view=view, delete_after=None, requires_fetch=True)
+                    self.controller = await dispatch_message(self.context, content=content, view=view, delete_after=None, requires_fetch=True)
 
             if not self._closing:
                 self._controller_view = view
@@ -573,7 +583,12 @@ class Player(VoiceProtocol):
             await self.update_voice_status(remove_status=True)
             if self.controller:
                 if self.controller.id == self.settings.get("music_request_channel", {}).get("controller_msg_id"):
-                    await self.controller.edit(embed=self.build_embed(), view=None)
+                    embed = self.build_embed()
+                    if getattr(getattr(self.controller, "flags", None), "components_v2", False) is True:
+                        view = CompactIdle(embed, self.get_msg("player.errors.noTrackPlaying"))
+                        await self.controller.edit(content=None, embed=None, attachments=[], view=view)
+                    else:
+                        await self.controller.edit(embed=embed, view=None)
                 else:
                     await self.controller.delete()
         except:
@@ -614,10 +629,30 @@ class Player(VoiceProtocol):
         if self.channel:
             self._logger.debug(f"Player in {self.guild.name}({self.guild.id}) has been connected to {self.channel.name}({self.channel.id}).")
 
-    async def stop(self):
+    async def stop(self, *, unpause: bool = False):
         """Stops the currently playing track."""
         self._current = None
-        await self.send(method=RequestMethod.PATCH, data={'encodedTrack': None})
+        data = {'encodedTrack': None}
+        if unpause:
+            data['paused'] = False
+        await self.send(method=RequestMethod.PATCH, data=data)
+        if unpause:
+            self._paused = False
+
+    async def stop_playback(self):
+        track = self.current
+        if track is None:
+            return
+        self.playback_stopped = True
+        try:
+            await self.stop(unpause=True)
+        except (Exception, asyncio.CancelledError):
+            self.playback_stopped = False
+            if self._current is None:
+                self._current = track
+            raise
+        await self.invoke_controller()
+        await self.update_voice_status()
 
     async def disconnect(self, *, force: bool = False):
         """Disconnects the player from voice."""
@@ -698,6 +733,7 @@ class Player(VoiceProtocol):
             data["endTime"] = str(end or track.end_time)
 
         await self.send(method=RequestMethod.PATCH, query=f"noReplace={ignore_if_playing}", data=data)
+        self.playback_stopped = False
         if self._node.yt_ratelimit:
             await self._node.yt_ratelimit.handle_request()
 

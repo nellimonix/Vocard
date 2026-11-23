@@ -322,12 +322,13 @@ async def dispatch_message(
     Returns:
         The sent message object, or None.
     """
-    if not content:
+    use_layout = isinstance(view, discord.ui.LayoutView)
+    if not content and not use_layout:
         content = "No content provided."
 
     # Determine the text to send
     embed = content if isinstance(content, discord.Embed) else None
-    text = None if embed else str(content).format(*params) if params else str(content)
+    text = None if embed or use_layout else str(content).format(*params) if params else str(content)
 
     # Determine the sending function
     send_func = (

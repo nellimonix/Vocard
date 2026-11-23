@@ -132,12 +132,14 @@ class Listeners(commands.Cog):
 
     @commands.Cog.listener()
     async def on_voicelink_track_end(self, player: voicelink.Player, track, _):
-        await player.do_next()
+        if not player.playback_stopped:
+            await player.do_next()
 
     @commands.Cog.listener()
     async def on_voicelink_track_stuck(self, player: voicelink.Player, track, _):
         await asyncio.sleep(10)
-        await player.do_next()
+        if not player.playback_stopped:
+            await player.do_next()
 
     @commands.Cog.listener()
     async def on_voicelink_track_exception(self, player: voicelink.Player, track, error: dict):
