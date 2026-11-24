@@ -116,7 +116,7 @@ class Track:
 
     async def get_recommendations(self, node: Node) -> List[Track]:
         """Fetches recommended tracks based on the current track."""
-        if not node or not node._available:
+        if not node or not node._available or self.source == "vkmusic":
             return []
 
         rec_type = TrackRecType.from_platform(self.source)

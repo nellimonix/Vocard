@@ -5,6 +5,7 @@ import logging
 import unittest
 import _bootstrap
 from types import SimpleNamespace
+from urllib.parse import quote
 from unittest.mock import AsyncMock, Mock, patch
 
 import discord
@@ -76,6 +77,23 @@ class VoiceTests(unittest.IsolatedAsyncioTestCase):
         member = SimpleNamespace(bot=False, guild=SimpleNamespace(voice_client=player))
         await Listeners.on_voice_state_update(None, member, SimpleNamespace(channel=object()), SimpleNamespace(channel=None))
         player._schedule_inactive_cleanup_timer.assert_not_called()
+
+    async def test_text_search_uses_yandex_and_direct_vk_links_are_preserved(self):
+        node = SimpleNamespace(send=AsyncMock(return_value={"loadType": "empty"}))
+        queries = (
+            ("Artist: Track", "ymsearch:Artist: Track"),
+            ("vksearch: Artist", "ymsearch:Artist"),
+            ("https://vk.com/audio-123_456", "https://vk.com/audio-123_456"),
+            ("vk.ru/music/playlist/-456_123_access", "vk.ru/music/playlist/-456_123_access"),
+            ("https://vk.com/music/album/-1_2", "https://vk.com/music/album/-1_2"),
+            ("https://vk.com/artist/name", "https://vk.com/artist/name"),
+        )
+        for query, identifier in queries:
+            await Node.get_tracks(node, query, requester=None, search_type=SearchType.VK_MUSIC)
+            node.send.assert_awaited_with(RequestMethod.GET, f"loadtracks?identifier={quote(identifier)}")
+        self.assertEqual(node.send.await_count, len(queries))
+        self.assertIsNone(await Node.get_tracks(node, "vkrec:123_456", requester=None))
+        self.assertEqual(node.send.await_count, len(queries))
 
     async def test_lavalink_retries_transient_read_and_stops_on_rate_limit(self):
         temporary = {"loadType": "error", "data": {"message": "Could not load track", "severity": "fault",

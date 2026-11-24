@@ -39,7 +39,6 @@ plugins:
       # - "dzisrc:%ISRC%" # Deezer ISRC provider
       # - "dzsearch:%QUERY%" # Deezer search provider
       - "ymsearch:%QUERY%" # Will be used if track has no ISRC or no track could be found for the ISRC
-      - "vksearch:%QUERY%" # Will be used if track has no ISRC or no track could be found for the ISRC
       #  you can add multiple other fallback sources here
     sources:
       spotify: true # Enable Spotify source

@@ -38,7 +38,7 @@ from . import (
     __version__
 )
 
-from .enums import SearchType, NodeAlgorithm
+from .enums import SearchType, TrackRecType, NodeAlgorithm
 from .exceptions import (
     NodeConnectionFailure,
     NodeCreationError,
@@ -51,7 +51,6 @@ from .objects import Playlist, Track
 from .utils import ExponentialBackoff, NodeStats, NodeInfo, Ping
 from .enums import RequestMethod
 from .ratelimit import YTRatelimit, YTToken, STRATEGY
-from .config import Config
 
 if TYPE_CHECKING:
     from .player import Player
@@ -59,6 +58,20 @@ if TYPE_CHECKING:
 URL_REGEX = re.compile(
     r"https?://(?:www\.)?.+"
 )
+VK_MUSIC_URL = re.compile(
+    r"(?:https?://)?(?:www\.)?vk\.(?:com|ru)/"
+    r"(?:audio-?\d+_-?\d+(?:_[^/?#]+)?"
+    r"|music/(?:playlist|album)/-?[A-Za-z\d]+_-?[A-Za-z\d]+(?:_[^/?#]+)?"
+    r"|artist/[^/?#]+"
+    r"|audios\d+\?q=[^&]+&z=audio_playlist-?[A-Za-z\d]+_-?[A-Za-z\d]+(?:_[^/?#]+)?)"
+    r"(?:[/?#].*)?",
+    flags=re.IGNORECASE,
+)
+SEARCH_PREFIXES = {source.value for source in SearchType}
+RECOMMENDATION_PREFIXES = {
+    source.value.partition(":")[0] for source in TrackRecType
+    if source is not TrackRecType.VK_MUSIC and not source.value.startswith("https://")
+}
 
 NODE_VERSION = "v4"
 
@@ -367,11 +380,16 @@ class Node:
         You can also pass in a discord.py Context object to get a
         Context object on any track you search.
         """
-        if not search_type:
-            search_type = Config().search_platform
-
-        if not URL_REGEX.match(query) and ':' not in query:
-            query = f"{search_type}:{query}"
+        query = query.strip()
+        prefix, separator, term = query.partition(":")
+        if prefix.lower() == "vkrec" and separator:
+            return None
+        if not (URL_REGEX.match(query) or VK_MUSIC_URL.fullmatch(query) or (separator and prefix.lower() in RECOMMENDATION_PREFIXES)):
+            if separator and prefix.lower() in SEARCH_PREFIXES:
+                query = term.strip()
+            if not query:
+                return None
+            query = f"{SearchType.YANDEX_MUSIC}:{query}"
 
         route = f"loadtracks?identifier={quote(query)}"
         for attempt in range(2):
