@@ -233,6 +233,8 @@ class Settings(commands.Cog, name="settings"):
         toggle = not settings.get('controller_msg', True)
 
         await MongoDBHandler.update_settings(ctx.guild.id, {"$set": {'controller_msg': toggle}})
+        if player := ctx.guild.voice_client:
+            player.settings['controller_msg'] = toggle
         await send_localized_message(ctx, 'settings.actions.controllerMsgToggled', await LangHandler.get_lang(ctx.guild.id, "common.status.enabled" if toggle else "common.status.disabled"))
 
     @settings.command(name='silentmsg', aliases=get_aliases('silentmsg'), description=app_commands.locale_str('Enable or disable silent messages that are sent without notifications.', key='settings.silentmsg'))
@@ -275,6 +277,8 @@ class Settings(commands.Cog, name="settings"):
             await player.set_volume(100, ctx.author)
         elif setting_key == "duplicate_track" and player:
             player.queue._allow_duplicate = True
+        elif setting_key == "controller_msg" and player:
+            player.settings.pop("controller_msg", None)
         await send_localized_message(ctx, "settings.actions.resetDone", setting.capitalize())
 
     @app_commands.command(name="debug")

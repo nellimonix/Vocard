@@ -84,14 +84,20 @@ class ControlButton(discord.ui.Button):
         if self.icon_only and not self.emoji:
             self.emoji = self.fallback_emoji
 
-    async def send(self, interaction: discord.Interaction, key: str, *params, view: discord.ui.View = None, ephemeral: bool = False) -> None:
+    async def send(self, interaction: discord.Interaction, key: str, *params, view: discord.ui.View = None,
+                   ephemeral: bool = False, announcement: bool = False) -> None:
         stay = self.player.settings.get("controller_msg", True)
+        if announcement and not stay:
+            return
         return await send_localized_message(
             interaction, key, *params,
             view=view,
             delete_after=None if ephemeral or stay else 10,
             ephemeral=ephemeral
         )
+
+    async def send_vote(self, interaction: discord.Interaction, key: str, *params) -> None:
+        await self.send(interaction, key, *params, ephemeral=not self.player.settings.get("controller_msg", True))
 
     async def send_embed(self, interaction: discord.Interaction, embed: discord.Embed, *params, view: discord.ui.View = None, ephemeral: bool = False) -> None:
         stay = self.player.settings.get("controller_msg", True)
@@ -120,8 +126,11 @@ class ControlSelect(discord.ui.Select):
 
         self.player: voicelink.Player = player
 
-    async def send(self, interaction: discord.Interaction, key: str, *params, view: discord.ui.View = None, ephemeral: bool = False) -> None:
+    async def send(self, interaction: discord.Interaction, key: str, *params, view: discord.ui.View = None,
+                   ephemeral: bool = False, announcement: bool = False) -> None:
         stay = self.player.settings.get("controller_msg", True)
+        if announcement and not stay:
+            return
         return await send_localized_message(
             interaction, key, *params,
             view=view,
@@ -145,7 +154,7 @@ class Back(ControlButton):
                 if len(self.player.previous_votes) >= (required := self.player.required()):
                     pass
                 else:
-                    return await self.send(interaction, "player.controls.back.vote", interaction.user, len(self.player.previous_votes), required)
+                    return await self.send_vote(interaction, "player.controls.back.vote", interaction.user, len(self.player.previous_votes), required)
 
         if not self.player.is_playing:
             self.player.queue.backto(1)
@@ -154,7 +163,7 @@ class Back(ControlButton):
             self.player.queue.backto(2)
             await self.player.stop()
 
-        await self.send(interaction, "player.controls.back.success", interaction.user)
+        await self.send(interaction, "player.controls.back.success", interaction.user, announcement=True)
 
         if self.player.queue._repeat.mode == voicelink.LoopType.TRACK:
             await self.player.set_repeat(voicelink.LoopType.OFF)
@@ -188,7 +197,7 @@ class PlayPause(ControlButton):
             else:
                 votes.add(interaction.user)
                 if len(votes) < (required := self.player.required()):
-                    return await self.send(interaction, f"player.controls.{vote_type}.vote", interaction.user, len(votes), required)
+                    return await self.send_vote(interaction, f"player.controls.{vote_type}.vote", interaction.user, len(votes), required)
 
         await self.player.set_pause(is_paused, interaction.user)
         self.change_states("resume" if is_paused else "pause")
@@ -211,9 +220,9 @@ class Skip(ControlButton):
                 if len(self.player.skip_votes) >= (required := self.player.required()):
                     pass
                 else:
-                    return await self.send(interaction, "player.controls.skip.vote", interaction.user, len(self.player.skip_votes), required)
+                    return await self.send_vote(interaction, "player.controls.skip.vote", interaction.user, len(self.player.skip_votes), required)
 
-        await self.send(interaction, "player.controls.skip.success", interaction.user)
+        await self.send(interaction, "player.controls.skip.success", interaction.user, announcement=True)
 
         if self.player.queue._repeat.mode == voicelink.LoopType.TRACK:
             await self.player.set_repeat(voicelink.LoopType.OFF)
@@ -232,10 +241,10 @@ class Stop(ControlButton):
                 if len(self.player.stop_votes) >= (required := self.player.required(leave=True)):
                     pass
                 else:
-                    return await self.send(interaction, "player.controls.leave.vote", interaction.user, len(self.player.stop_votes), required)
+                    return await self.send_vote(interaction, "player.controls.leave.vote", interaction.user, len(self.player.stop_votes), required)
 
         await self.player.teardown()
-        await self.send(interaction, "player.controls.leave.success", interaction.user)
+        await self.send(interaction, "player.controls.leave.success", interaction.user, announcement=True)
 
 class StopPlayback(ControlButton):
     def __init__(self, **kwargs):
@@ -311,7 +320,7 @@ class VolumeUp(ControlButton):
         if self.icon_only:
             await self.refresh_controller(interaction)
         else:
-            await self.send(interaction, 'settings.actions.volumeSet', value, ephemeral=True)
+            await self.send(interaction, 'settings.actions.volumeSet', value, ephemeral=True, announcement=True)
 
 class VolumeDown(ControlButton):
     def __init__(self, **kwargs):
@@ -327,7 +336,7 @@ class VolumeDown(ControlButton):
         if self.icon_only:
             await self.refresh_controller(interaction)
         else:
-            await self.send(interaction, 'settings.actions.volumeSet', value, ephemeral=True)
+            await self.send(interaction, 'settings.actions.volumeSet', value, ephemeral=True, announcement=True)
 
 class VolumeMute(ControlButton):
     def __init__(self, **kwargs):
@@ -356,7 +365,8 @@ class AutoPlay(ControlButton):
 
         check = not self.player.settings.get("autoplay", False)
         self.player.settings['autoplay'] = check
-        await self.send(interaction, 'player.controls.autoplay', await LangHandler.get_lang(interaction.guild_id, 'common.status.enabled' if check else "common.status.disabled"))
+        if self.player.settings.get("controller_msg", True):
+            await self.send(interaction, 'player.controls.autoplay', await LangHandler.get_lang(interaction.guild_id, 'common.status.enabled' if check else "common.status.disabled"))
 
         if not self.player.is_playing:
             await self.player.do_next()
@@ -374,10 +384,10 @@ class Shuffle(ControlButton):
                 if len(self.player.shuffle_votes) >= (required := self.player.required()):
                     pass
                 else:
-                    return await self.send(interaction, 'player.controls.shuffle.vote', interaction.user, len(self.player.shuffle_votes), required)
+                    return await self.send_vote(interaction, 'player.controls.shuffle.vote', interaction.user, len(self.player.shuffle_votes), required)
 
         await self.player.shuffle("queue", interaction.user)
-        await self.send(interaction, 'player.controls.shuffle.success')
+        await self.send(interaction, 'player.controls.shuffle.success', announcement=True)
 
 class Forward(ControlButton):
     def __init__(self, **kwargs):
@@ -401,7 +411,7 @@ class Forward(ControlButton):
         if self.icon_only:
             await self.refresh_controller(interaction, position=position)
         else:
-            await self.send(interaction, 'player.controls.forward', format_ms(position))
+            await self.send(interaction, 'player.controls.forward', format_ms(position), announcement=True)
 
 class Rewind(ControlButton):
     def __init__(self, **kwargs):
@@ -423,7 +433,7 @@ class Rewind(ControlButton):
         if self.icon_only:
             await self.refresh_controller(interaction, position=position)
         else:
-            await self.send(interaction, 'player.controls.rewind', format_ms(position))
+            await self.send(interaction, 'player.controls.rewind', format_ms(position), announcement=True)
 
 class Lyrics(ControlButton):
     def __init__(self, **kwargs):
@@ -482,8 +492,7 @@ class Tracks(ControlSelect):
         self.player.queue.skipto(int(self.values[0].split(". ")[0]))
         await self.player.stop()
 
-        if self.player.settings.get("controller_msg", True):
-            await self.send(interaction, "player.controls.skip.success", interaction.user)
+        await self.send(interaction, "player.controls.skip.success", interaction.user, announcement=True)
 
 class Effects(ControlSelect):
     def __init__(self, player: "voicelink.Player", btn_data, row):
@@ -508,15 +517,15 @@ class Effects(ControlSelect):
         avalibable_filters = voicelink.Filters.get_available_filters()
         if self.values[0] == "None":
             await self.player.reset_filter(requester=interaction.user)
-            return await self.send(interaction, "effects.cleared")
+            return await self.send(interaction, "effects.cleared", announcement=True)
 
         selected_filter: voicelink.Filter = avalibable_filters.get(self.values[0].lower())()
         if self.player.filters.has_filter(filter_tag=selected_filter.tag):
             await self.player.remove_filter(filter_tag=selected_filter.tag, requester=interaction.user)
-            await self.send(interaction, "effects.cleared")
+            await self.send(interaction, "effects.cleared", announcement=True)
         else:
             await self.player.add_filter(selected_filter, requester=interaction.user)
-            await self.send(interaction, "effects.added", selected_filter.tag)
+            await self.send(interaction, "effects.added", selected_filter.tag, announcement=True)
 
 BUTTON_TYPE: Dict[str, Type[Union[ControlButton, ControlSelect]]] = {
     "back": Back,

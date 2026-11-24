@@ -10,7 +10,7 @@ from voicelink import Node, Player, SearchType
 from voicelink.enums import LoopType
 from voicelink.views.compact_controller import AddTrackModal, CompactController, CompactIdle, CompactQueueEnd, ICONS, READOUT_ICONS
 from voicelink.queue import LoopTypeCycle
-from voicelink.views.controller import Forward, Rewind, Stop, StopPlayback
+from voicelink.views.controller import Forward, Rewind, Skip, Stop, StopPlayback
 
 
 def sample_player(*, custom=True):
@@ -24,6 +24,58 @@ def sample_player(*, custom=True):
 
 
 class CompactControllerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_controller_messages_setting_applies_to_the_existing_skip_button(self):
+        from cogs.settings import Settings
+
+        player = sample_player()
+        player.settings = {}
+        player.is_playing = True
+        player.is_privileged = Mock(return_value=True)
+        player.stop = AsyncMock()
+        guild = SimpleNamespace(id=42, voice_client=player)
+        ctx = SimpleNamespace(guild=guild)
+        interaction = SimpleNamespace(user=object())
+        button = Skip(player=player, btn_data={"emoji": "⏭️"}, icon_only=True)
+
+        with patch("cogs.settings.MongoDBHandler.get_settings", new_callable=AsyncMock, return_value={}), \
+             patch("cogs.settings.MongoDBHandler.update_settings", new_callable=AsyncMock) as update, \
+             patch("cogs.settings.LangHandler.get_lang", new_callable=AsyncMock, return_value="Disabled"), \
+             patch("cogs.settings.send_localized_message", new_callable=AsyncMock), \
+             patch("voicelink.views.controller.send_localized_message", new_callable=AsyncMock) as send:
+            await Settings.controllermsg.callback(None, ctx)
+            self.assertFalse(player.settings["controller_msg"])
+            await button.callback(interaction)
+            player.stop.assert_awaited_once_with()
+            send.assert_not_awaited()
+
+            await Settings.reset_setting.callback(None, ctx, setting="Controller messages")
+            self.assertNotIn("controller_msg", player.settings)
+            await button.callback(interaction)
+
+        self.assertEqual(player.stop.await_count, 2)
+        self.assertEqual(send.await_args.args[1], "player.controls.skip.success")
+        self.assertEqual(update.await_args_list, [call(42, {"$set": {"controller_msg": False}}),
+                                                 call(42, {"$unset": {"controller_msg": ""}})])
+
+    async def test_skip_vote_stays_private_when_controller_messages_are_disabled(self):
+        player = sample_player()
+        player.settings = {"controller_msg": False}
+        player.is_playing = True
+        player.is_privileged = Mock(return_value=False)
+        player.required = Mock(return_value=2)
+        player.skip_votes = set()
+        player.stop = AsyncMock()
+        interaction = SimpleNamespace(user=object())
+        button = Skip(player=player, btn_data={"emoji": "⏭️"}, icon_only=True)
+
+        with patch("voicelink.views.controller.send_localized_message", new_callable=AsyncMock) as send:
+            await button.callback(interaction)
+
+        player.stop.assert_not_awaited()
+        self.assertIn(interaction.user, player.skip_votes)
+        self.assertEqual(send.await_args.args[1], "player.controls.skip.vote")
+        self.assertTrue(send.await_args.kwargs["ephemeral"])
+
     async def test_native_message_uses_thumbnail_and_uploaded_emoji_ids(self):
         player = sample_player()
         view = CompactController(player, discord.Embed(colour=0x896657))
