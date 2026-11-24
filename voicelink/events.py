@@ -23,7 +23,6 @@ SOFTWARE.
 
 from __future__ import annotations
 
-from .pool import NodePool
 from discord.ext.commands import Bot
 from typing import TYPE_CHECKING
 
@@ -93,7 +92,7 @@ class TrackStuckEvent(VoicelinkEvent):
 
     def __init__(self, data: dict, player: Player):
         self.player: Player = player
-        self.track = self.player._ending_track
+        self.track = self.player.current or self.player._ending_track
         self.threshold: float = data["thresholdMs"]
 
         # on_voicelink_track_stuck(player, track, threshold)
@@ -112,12 +111,12 @@ class TrackExceptionEvent(VoicelinkEvent):
 
     def __init__(self, data: dict, player: Player):
         self.player: Player = player
-        self.track = self.player._ending_track
-        self.exception: dict = data.get("exception", {
+        self.track = self.player.current or self.player._ending_track
+        self.exception: dict = data.get("exception") or {
             "severity": "",
             "message": "",
             "cause": ""
-        })
+        }
 
         # on_voicelink_track_exception(player, track, error)
         self.handler_args = self.player, self.track, self.exception
@@ -127,10 +126,10 @@ class TrackExceptionEvent(VoicelinkEvent):
 
 
 class WebSocketClosedPayload:
-    def __init__(self, data: dict):
-        self.guild = NodePool.get_node().bot.get_guild(int(data["guildId"]))
+    def __init__(self, data: dict, guild):
+        self.guild = guild
         self.code: int = data["code"]
-        self.reason: str = data["code"]
+        self.reason: str = data.get("reason", "")
         self.by_remote: bool = data["byRemote"]
 
     def __repr__(self) -> str:
@@ -144,8 +143,8 @@ class WebSocketClosedEvent(VoicelinkEvent):
     """
     name = "websocket_closed"
 
-    def __init__(self, data: dict, _):
-        self.payload = WebSocketClosedPayload(data)
+    def __init__(self, data: dict, player):
+        self.payload = WebSocketClosedPayload(data, player.guild)
 
         # on_voicelink_websocket_closed(payload)
         self.handler_args = self.payload,

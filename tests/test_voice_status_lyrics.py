@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import discord
 
 from voicelink import Config, LangHandler, MongoDBHandler, Player, get_playback_player
-from voicelink.enums import RequestMethod
+from voicelink.enums import LoopType, RequestMethod
 from voicelink.exceptions import NodeException, VoicelinkException
 from voicelink.ipc.methods import getLyrics
 from voicelink.lyrics import split_lyrics
@@ -316,6 +316,68 @@ class PlayerDisconnectTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.node.players, {})
         self.assertIsNone(self.guild.voice_client)
 
+    async def test_discord_leave_timeout_clears_player_and_finishes_teardown(self):
+        self.guild.change_voice_state.side_effect = TimeoutError
+        message = SimpleNamespace(id=10, delete=AsyncMock())
+        self.player.controller = message
+        with patch.object(MongoDBHandler, "queue_player_shutdown") as save:
+            await self.player.teardown()
+        self.assertIsNone(self.guild.voice_client)
+        self.assertEqual(self.node.players, {})
+        message.delete.assert_awaited_once_with()
+        save.assert_called_once()
+
+    async def test_failed_track_start_keeps_the_queue_entry(self):
+        track = SimpleNamespace(track_id="encoded", position=0, end_time=None)
+        self.player.queue.put(track)
+        self.player.playback_stopped = True
+        self.player._voice_ready.set()
+        self.player.invoke_controller = AsyncMock()
+        self.node.send.side_effect = TimeoutError
+        await self.player.do_next()
+        self.assertIsNone(self.player.current)
+        self.assertEqual(self.player.queue.tracks(), [track])
+        self.assertEqual(self.node.send.await_count, 1)
+        self.player.invoke_controller.assert_awaited_once_with()
+
+    async def test_late_track_end_cannot_end_a_replacement_with_the_same_encoded_track(self):
+        track = SimpleNamespace(track_id="encoded")
+        self.player._current = track
+        self.player._play_attempt = "new-session"
+        self.player._bot.dispatch = Mock()
+        old_end = {"type": "TrackEndEvent", "reason": "finished",
+                   "track": {"encoded": "encoded", "userData": {"yamusic_attempt": "old-session"}}}
+        await self.player._dispatch_event(old_end)
+        self.assertIs(self.player.current, track)
+        self.player._bot.dispatch.assert_not_called()
+
+    async def test_repeat_queue_stops_after_all_tracks_fail(self):
+        tracks = [SimpleNamespace(track_id=encoded) for encoded in ("one", "two")]
+        self.guild.name = "test"
+        self.player._bot.dispatch = Mock()
+        for track in tracks:
+            self.player.queue.put(track)
+        self.player.queue._repeat.set_mode(LoopType.QUEUE)
+        for index, track in enumerate(tracks):
+            self.player._current = track
+            self.player._play_attempt = track.track_id
+            event = {"type": "TrackEndEvent", "reason": "loadFailed",
+                     "track": {"encoded": track.track_id, "userData": {"yamusic_attempt": track.track_id}}}
+            await self.player._dispatch_event(event)
+            self.assertIsNone(self.player.current)
+            self.assertEqual(self.player.queue._repeat.mode, LoopType.QUEUE if index == 0 else LoopType.OFF)
+        self.assertEqual(self.player._bot.dispatch.call_count, 2)
+
+    async def test_shutdown_statistics_retry_with_the_same_idempotency_key(self):
+        collection = SimpleNamespace(update_one=AsyncMock(side_effect=[TimeoutError(), None]))
+        with patch.object(MongoDBHandler, "_settings_db", collection), patch("voicelink.mongodb.asyncio.sleep", new=AsyncMock()):
+            await MongoDBHandler._write_player_shutdown(42, "one-session", 1200, 1.5)
+        self.assertEqual(collection.update_one.await_count, 2)
+        first_filter, first_update = collection.update_one.await_args_list[0].args
+        self.assertEqual(first_filter, {"_id": 42, "closed_player_sessions": {"$ne": "one-session"}})
+        self.assertEqual(first_update["$inc"], {"played_time": 1.5})
+        self.assertEqual(collection.update_one.await_args_list[0], collection.update_one.await_args_list[1])
+
     async def test_disconnect_clears_cached_client_when_channel_is_missing(self):
         self.player.channel = None
         await self.player.disconnect()
@@ -332,7 +394,7 @@ class PlayerDisconnectTests(unittest.IsolatedAsyncioTestCase):
             entered.set()
             await release.wait()
 
-        with patch.object(MongoDBHandler, "update_settings", side_effect=save):
+        with patch.object(MongoDBHandler, "_write_player_shutdown", side_effect=save):
             kicked = asyncio.create_task(self.player.on_voice_state_update({"channel_id": None}))
             try:
                 await asyncio.wait_for(entered.wait(), timeout=1)
@@ -340,10 +402,13 @@ class PlayerDisconnectTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(self.node.players, {})
                 self.node.send.assert_awaited_once_with(RequestMethod.DELETE, "sessions/session/players/42")
                 self.guild.change_voice_state.assert_not_awaited()
-                self.assertFalse(kicked.done())
+                await asyncio.wait_for(kicked, timeout=1)
+                self.assertTrue(MongoDBHandler._shutdown_writes)
             finally:
+                writes = tuple(MongoDBHandler._shutdown_writes)
                 release.set()
                 await kicked
+                await asyncio.gather(*writes)
 
     async def test_play_reconnects_when_discord_has_lost_the_cached_voice_session(self):
         self.guild.me = SimpleNamespace(voice=None)
@@ -351,7 +416,7 @@ class PlayerDisconnectTests(unittest.IsolatedAsyncioTestCase):
         ctx = SimpleNamespace(guild=self.guild)
         replacement = object()
 
-        with patch.object(MongoDBHandler, "update_settings", new=AsyncMock()), \
+        with patch.object(MongoDBHandler, "queue_player_shutdown", new=Mock()), \
              patch("voicelink.player.connect_channel", return_value=replacement) as connect:
             self.assertIs(await get_playback_player(ctx), replacement)
 
@@ -384,7 +449,7 @@ class PlayerDisconnectTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_queued_playback_waits_for_lavalink_voice_registration(self):
         track = SimpleNamespace(position=0, requester=SimpleNamespace(bot=True))
-        self.player.queue = SimpleNamespace(is_empty=False, get=Mock(return_value=track))
+        self.player.queue = SimpleNamespace(is_empty=False, _position=0, get=Mock(return_value=track))
         self.player._ipc_client = SimpleNamespace(_is_connected=False)
         self.player.play = AsyncMock()
         self.player.invoke_controller = AsyncMock()

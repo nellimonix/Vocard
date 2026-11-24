@@ -27,7 +27,9 @@ import asyncio
 import logging
 
 from typing import Any, Dict, Optional, Literal, TypedDict, List
+from uuid import uuid4
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorCollection
+from pymongo.errors import ConnectionFailure, ExecutionTimeout
 
 from .config import Config
 from .cache import BoundedTTLCache
@@ -67,6 +69,7 @@ class MongoDBHandler:
     _settings_db: Optional[AsyncIOMotorCollection] = None
     _users_db: Optional[AsyncIOMotorCollection] = None
     _lock: asyncio.Lock = asyncio.Lock()
+    _shutdown_writes: set[asyncio.Task] = set()
 
     # Cache with TTL (Time To Live in seconds)
     _CACHE_TTL: int = 300  # 5 minutes
@@ -340,6 +343,35 @@ class MongoDBHandler:
 
         except Exception as e:
             raise ConnectionError(f"Failed to retrieve settings: {str(e)}")
+
+    @classmethod
+    def queue_player_shutdown(cls, guild_id: int, last_active: int, played_time: float) -> None:
+        task = asyncio.create_task(cls._write_player_shutdown(guild_id, uuid4().hex, last_active, played_time))
+        cls._shutdown_writes.add(task)
+        task.add_done_callback(cls._shutdown_writes.discard)
+
+    @classmethod
+    async def _write_player_shutdown(cls, guild_id: int, session_id: str, last_active: int, played_time: float) -> None:
+        update = {
+            "$max": {"last_active": last_active},
+            "$inc": {"played_time": played_time},
+            "$push": {"closed_player_sessions": {"$each": [session_id], "$slice": -64}},
+        }
+        for delay, timeout in ((0, 8), (5, 22)):
+            if delay:
+                await asyncio.sleep(delay)
+            try:
+                async with asyncio.timeout(timeout):
+                    await cls._settings_db.update_one({"_id": guild_id, "closed_player_sessions": {"$ne": session_id}}, update)
+            except (ConnectionFailure, ExecutionTimeout, TimeoutError):
+                continue
+            except Exception:
+                logger.exception("Failed to write player shutdown statistics for guild %s", guild_id)
+                return
+            cls._settings_buffer.pop(guild_id, None)
+            cls._last_access.pop(guild_id, None)
+            return
+        logger.warning("Player shutdown statistics timed out after retry for guild %s", guild_id)
 
     @classmethod
     async def update_settings(

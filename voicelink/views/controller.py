@@ -28,7 +28,7 @@ from discord.ext import commands
 from typing import Optional, Dict, Type, Union, Any
 
 from ..config import Config
-from ..utils import format_ms, send_localized_message, dispatch_message
+from ..utils import defer_interaction, dispatch_message, format_ms, is_expired_interaction_error, send_localized_message
 from ..language import LangHandler
 from ..mongodb import MongoDBHandler
 from ..lyrics import split_lyrics
@@ -555,7 +555,8 @@ class ControllerInteractions:
 
         custom_id = (getattr(interaction, "data", None) or {}).get("custom_id")
         if custom_id != ADD_TRACK_ID and not interaction.response.is_done():
-            await interaction.response.defer()
+            if not await defer_interaction(interaction):
+                return False
 
         if not self.player.node._available:
             await send_localized_message(interaction, "player.errors.nodeReconnect", ephemeral=True)
@@ -574,12 +575,19 @@ class ControllerInteractions:
             return False
 
     async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item) -> None:
-        if isinstance(error, ButtonOnCooldown):
-            sec = int(error.retry_after)
-            return await dispatch_message(interaction, f"You're on cooldown for {sec} second{'' if sec == 1 else 's'}!", ephemeral=True)
+        if is_expired_interaction_error(error):
+            return
+        try:
+            if isinstance(error, ButtonOnCooldown):
+                sec = int(error.retry_after)
+                return await dispatch_message(interaction, f"You're on cooldown for {sec} second{'' if sec == 1 else 's'}!", ephemeral=True)
 
-        if isinstance(error, voicelink.VoicelinkException):
-            return await dispatch_message(interaction, error, ephemeral=True)
+            if isinstance(error, voicelink.VoicelinkException):
+                return await dispatch_message(interaction, error, ephemeral=True)
+        except discord.NotFound as response_error:
+            if not is_expired_interaction_error(response_error):
+                raise
+            return
 
         await super().on_error(interaction, error, item)
 

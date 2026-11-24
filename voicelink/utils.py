@@ -296,6 +296,25 @@ def truncate_string(text: str, length: int = 40) -> str:
     """
     return text[:length - 3] + "..." if len(text) > length else text
 
+def is_expired_interaction_error(error: Exception) -> bool:
+    while isinstance(error, (commands.CommandError, discord.app_commands.AppCommandError)):
+        original = getattr(error, "original", None)
+        if original is None or original is error:
+            break
+        error = original
+    return isinstance(error, discord.NotFound) and error.code in (10062, 10015)
+
+
+async def defer_interaction(interaction: discord.Interaction, **kwargs) -> bool:
+    try:
+        await interaction.response.defer(**kwargs)
+    except discord.NotFound as error:
+        if not is_expired_interaction_error(error):
+            raise
+        return False
+    return True
+
+
 async def dispatch_message(
     ctx: Union[commands.Context, discord.Interaction, TempCtx],
     content: Union[str, discord.Embed] = None,

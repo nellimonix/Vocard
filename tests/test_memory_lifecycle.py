@@ -236,7 +236,7 @@ class ControllerLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.sender_patch = patch("voicelink.player.dispatch_message", new=self.send)
         self.sender_patch.start()
         self.addCleanup(self.sender_patch.stop)
-        self.settings_patch = patch.object(MongoDBHandler, "update_settings", new=AsyncMock())
+        self.settings_patch = patch.object(MongoDBHandler, "queue_player_shutdown", new=Mock())
         self.settings_patch.start()
         self.addCleanup(self.settings_patch.stop)
 

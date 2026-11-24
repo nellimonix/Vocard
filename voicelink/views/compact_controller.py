@@ -4,7 +4,7 @@ import discord
 
 from ..config import Config
 from ..exceptions import VoicelinkException
-from ..utils import dispatch_message, format_ms, send_localized_message
+from ..utils import defer_interaction, dispatch_message, format_ms, is_expired_interaction_error, send_localized_message
 from .controller import ADD_TRACK_ID, BUTTON_TYPE, Back, ControllerInteractions, Stop, StopPlayback
 
 
@@ -144,7 +144,8 @@ class AddTrackModal(discord.ui.Modal):
         if (quantity and (not quantity.isdecimal() or int(quantity) == 0)) or (offset and not offset.isdecimal()):
             return await send_localized_message(interaction, "queue.errors.outOfList", ephemeral=True)
 
-        await interaction.response.defer(ephemeral=True)
+        if not await defer_interaction(interaction, ephemeral=True):
+            return
         was_playing = player.is_playing
         try:
             await enqueue_search(interaction, player, query, interaction.user, limit=int(quantity) if quantity else None,
@@ -153,6 +154,10 @@ class AddTrackModal(discord.ui.Modal):
                 await player.invoke_controller()
         except VoicelinkException as error:
             await dispatch_message(interaction, str(error), ephemeral=True)
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        if not is_expired_interaction_error(error):
+            await super().on_error(interaction, error)
 
 
 class OpenAddTrack(discord.ui.Button):

@@ -28,11 +28,13 @@ import time, logging, asyncio
 from math import ceil
 from random import shuffle, choice
 from typing import Any, Dict, List, Optional, Union, Tuple, TYPE_CHECKING
+from uuid import uuid4
 
-from aiohttp import ClientError
+from aiohttp import ClientConnectionError, ClientError
 from discord import (
     AllowedMentions,
     Client,
+    ConnectionClosed,
     Guild,
     VoiceChannel,
     VoiceProtocol,
@@ -52,7 +54,7 @@ from .pool import Node, NodePool
 from .objects import Track, Playlist
 from .filters import Filter, Filters
 from .enums import SearchType, LoopType, RequestMethod
-from .events import VoicelinkEvent, TrackEndEvent, TrackStartEvent, TrackExceptionEvent
+from .events import VoicelinkEvent, TrackEndEvent, TrackStartEvent, TrackExceptionEvent, TrackStuckEvent
 from .exceptions import (
     DuplicateTrack,
     FilterInvalidArgument,
@@ -157,7 +159,9 @@ class Player(VoiceProtocol):
         self.playback_stopped = False
         self._is_connected: bool = False
         self._ping: float = 0.0
-        self._track_is_stuck = False
+        self._track_load_failures = 0
+        self._play_attempt = None
+        self._acknowledged_attempt = None
 
         self._position: int = 0
         self._last_position: int = 0
@@ -307,7 +311,7 @@ class Player(VoiceProtocol):
     @property
     def is_ipc_connected(self) -> bool:
         """Indicates whether the Inter-Process Communication (IPC) connection is active."""
-        return self._ipc_client._is_connected and self._ipc_connection
+        return bool(self._ipc_client and self._ipc_client._is_connected and self._ipc_connection)
 
     def get_msg(self, *keys) -> Union[list[str], str]:
         """Retrieves a localized message or list of messages based on the given keys
@@ -454,22 +458,46 @@ class Player(VoiceProtocol):
 
     async def _dispatch_event(self, data: dict):
         """Dispatches an event based on the type of event data received."""
-        event_type = data.get("type")
-        event: VoicelinkEvent = getattr(events, event_type)(data, self)
+        event_type = data.get("type") or ""
+        event_class = getattr(events, event_type, None)
+        if self._closing or not isinstance(event_class, type) or not issubclass(event_class, VoicelinkEvent):
+            return
+        if issubclass(event_class, (TrackEndEvent, TrackStartEvent, TrackExceptionEvent, TrackStuckEvent)):
+            track_data = data.get("track") or {}
+            attempt = (track_data.get("userData") or {}).get("yamusic_attempt")
+            if attempt is not None and attempt != self._play_attempt:
+                return
+            if attempt is None and self.current and track_data.get("encoded") not in (None, self.current.track_id):
+                return
+        event = event_class(data, self)
 
         if isinstance(event, TrackEndEvent) and event.reason != "replaced":
+            self._acknowledged_attempt = self._play_attempt
             self._current = None
+            self._play_attempt = None
+            if event.reason == "loadFailed":
+                self.note_track_failure()
+            elif event.reason == "finished":
+                self._track_load_failures = 0
 
-        if isinstance(event, TrackExceptionEvent) and event.exception["message"] == "This content isn’t available.":
+        if isinstance(event, TrackExceptionEvent) and event.exception.get("message") == "This content isn’t available.":
             if self._node.yt_ratelimit:
                 await self._node.yt_ratelimit.flag_active_token()
 
-        event.dispatch(self._bot)
-
         if isinstance(event, TrackStartEvent):
             self._ending_track = self._current
+            self._acknowledged_attempt = self._play_attempt
+
+        event.dispatch(self._bot)
 
         self._logger.debug(f"Player in {self.guild.name}({self.guild.id}) dispatched event {event_type}.")
+
+    def note_track_failure(self):
+        self._track_load_failures += 1
+        repeat = self.queue._repeat
+        repeat_size = max(1, len(self.queue._queue) - self.queue._repeat_position)
+        if repeat.mode == LoopType.TRACK or (repeat.mode == LoopType.QUEUE and self._track_load_failures >= repeat_size):
+            repeat.set_mode(LoopType.OFF)
 
     async def do_next(self):
         """Processes the next track in the queue."""
@@ -479,18 +507,13 @@ class Player(VoiceProtocol):
         if self._paused:
             self._paused = False
 
-        if self._track_is_stuck:
-            await asyncio.sleep(10)
-            self._track_is_stuck = False
-            if not self.accepts_tracks:
-                return
-
         if not self.queue.is_empty:
             try:
                 async with asyncio.timeout(25):
                     await self._voice_ready.wait()
             except TimeoutError:
                 self._logger.warning("Playback is waiting for a Lavalink voice connection")
+                await self.invoke_controller()
                 return
             if not self.accepts_tracks or self._current or self.is_playing:
                 return
@@ -502,25 +525,36 @@ class Player(VoiceProtocol):
         self.shuffle_votes.clear()
         self.stop_votes.clear()
 
-        try:
-            async with self._advance_lock:
-                if not self.accepts_tracks or self._current or self.is_playing:
-                    return
-                track = self.queue.get()
-                if track:
+        delayed = False
+        async with self._advance_lock:
+            if not self.accepts_tracks or self._current or self.is_playing:
+                return
+            position = self.queue._position
+            track = self.queue.get()
+            if track:
+                selected_position = self.queue._position
+                was_stopped = self.playback_stopped
+                try:
                     await self.play(track, start=track.position)
-        except Exception as e:
-            self._logger.error(f"Something went wrong while playing music in {self.guild.name}({self.guild.id})", exc_info=e)
-            await asyncio.sleep(5)
-            return await self.do_next()
+                except (ClientError, TimeoutError, NodeException, NodeNotAvailable) as error:
+                    if not self._closing and self.playback_stopped == was_stopped and self.queue._position == selected_position:
+                        self.queue._position = position
+                    self._logger.warning("Could not start queued track for guild %s: %s", self.guild.id, type(error).__name__)
+                    delayed = True
+
+        if delayed:
+            await self.invoke_controller()
+            return
 
         if not track:
-            if self.autoplay and await self.get_recommendations():
+            if self.autoplay and not self._track_load_failures and await self.get_recommendations():
                 return await self.do_next()
             if self.queue.is_empty:
                 self._schedule_inactive_cleanup_timer()
         else:
-            if not track.requester.bot:
+            if self.current is not track:
+                return
+            if track.requester and not track.requester.bot:
                 self._bot.loop.create_task(MongoDBHandler.update_user(track.requester.id, {
                     "$push": {"history": {"$each": [track.track_id], "$slice": -25}}
                 }))
@@ -660,19 +694,19 @@ class Player(VoiceProtocol):
             return
         self._closing = True
         self._stop_controller_view()
+        ended_at = round(time.time())
         await self.destroy()
+        played_time = round(max(0, ended_at - self.joinTime) / 60, 2)
+        MongoDBHandler.queue_player_shutdown(self.guild.id, ended_at, played_time)
 
-        try:
-            async with asyncio.timeout(5):
-                await MongoDBHandler.update_settings(self.guild.id, {"$set": {
-                    "last_active": (timeNow := round(time.time())),
-                    "played_time": round(self.settings.get("played_time", 0) + ((timeNow - self.joinTime) / 60), 2)
-                }})
-
-                if self.is_ipc_connected and self.guild.voice_client is None:
+        if self.is_ipc_connected and self.guild.voice_client is None:
+            try:
+                async with asyncio.timeout(5):
                     await self.send_ws({"op": "playerClose"})
-        except Exception:
-            self._logger.exception("Failed to save player shutdown state")
+            except (ClientConnectionError, TimeoutError):
+                self._logger.warning("IPC did not confirm player shutdown for guild %s", self.guild.id)
+            except Exception:
+                self._logger.exception("Failed to notify IPC about player shutdown")
 
         if self.controller is None:
             return
@@ -773,10 +807,13 @@ class Player(VoiceProtocol):
                 if guild.voice_client is self and self.channel is not None:
                     known_session = bool(self._voice_state.get("sessionId"))
                     if not known_session or getattr(guild.me, "voice", None) is not None:
-                        async with asyncio.timeout(5):
-                            await guild.change_voice_state(channel=None)
-                            if known_session:
-                                await self._voice_left.wait()
+                        try:
+                            async with asyncio.timeout(5):
+                                await guild.change_voice_state(channel=None)
+                                if known_session:
+                                    await self._voice_left.wait()
+                        except (TimeoutError, ClientConnectionError, ConnectionClosed):
+                            self._logger.warning("Discord did not confirm voice disconnect for guild %s", guild.id)
             finally:
                 self._is_connected = False
                 self._voice_state.clear()
@@ -830,23 +867,31 @@ class Player(VoiceProtocol):
         if not self._node:
             return track
 
+        attempt = uuid4().hex
         data = {
-            "encodedTrack": track.track_id,
+            "track": {"encoded": track.track_id, "userData": {"yamusic_attempt": attempt}},
             "position": str(start or 0)
         }
 
         if end or track.end_time:
             data["endTime"] = str(end or track.end_time)
 
-        await self.send(method=RequestMethod.PATCH, query=f"noReplace={ignore_if_playing}", data=data)
+        previous = self._current, self._play_attempt, self.playback_stopped
+        self._current, self._play_attempt = track, attempt
         self.playback_stopped = False
+        try:
+            await self.send(method=RequestMethod.PATCH, query=f"noReplace={ignore_if_playing}", data=data)
+        except (Exception, asyncio.CancelledError) as error:
+            confirmed = self._acknowledged_attempt == attempt and isinstance(error, (ClientError, TimeoutError))
+            if not confirmed:
+                if self._play_attempt == attempt and self._current is track:
+                    self._current, self._play_attempt, self.playback_stopped = previous
+                raise
         if self._node.yt_ratelimit:
             await self._node.yt_ratelimit.handle_request()
 
-        self._current = track
-
         self._logger.debug(f"Player in {self.guild.name}({self.guild.id}) playing {track.title} from uri {track.uri} with a length of {track.length}")
-        return self._current
+        return track
 
     def _validate_time(self, track: Track, start_time: int, end_time: int) -> None:
         """Validates the start and end times for a track."""
@@ -911,6 +956,7 @@ class Player(VoiceProtocol):
 
         finally:
             if tracks:
+                self._track_load_failures = 0
                 if self.channel.members and len([m for m in self.channel.members if not m.bot]) > 0:
                     self._cancel_inactive_cleanup_timer()
                 if self.is_ipc_connected:

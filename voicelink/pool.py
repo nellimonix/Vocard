@@ -240,7 +240,7 @@ class Node:
             return
 
         if "guildId" in data:
-            if not (player := self._players.get(int(data["guildId"]))):
+            if not (player := self._players.get(int(data["guildId"]))) or player.node is not self:
                 return
 
         if op == "event":
@@ -373,7 +373,25 @@ class Node:
         if not URL_REGEX.match(query) and ':' not in query:
             query = f"{search_type}:{query}"
 
-        response: dict[str, Any] = await self.send(RequestMethod.GET, f"loadtracks?identifier={quote(query)}")
+        route = f"loadtracks?identifier={quote(query)}"
+        for attempt in range(2):
+            if attempt:
+                await asyncio.sleep(0.25)
+            try:
+                async with asyncio.timeout(8):
+                    response: dict[str, Any] = await self.send(RequestMethod.GET, route)
+            except (aiohttp.ClientConnectionError, TimeoutError) as error:
+                if attempt:
+                    raise TrackLoadError("There was an error while trying to load this track.") from error
+                continue
+            if attempt or response.get("loadType") != "error":
+                break
+            failure = response.get("data") or {}
+            cause = " ".join(str(failure.get(key) or "") for key in ("message", "cause", "causeStackTrace"))
+            if re.search(r"\b429\b", cause):
+                break
+            if not any(kind in cause for kind in ("ConnectTimeoutException", "SocketTimeoutException", "UnknownHostException")):
+                break
         data = response.get("data")
         load_type = response.get("loadType")
 

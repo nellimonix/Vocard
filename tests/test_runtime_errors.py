@@ -6,19 +6,33 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 import discord
+from discord.ext import commands
 
 from voicelink import Config, MongoDBHandler
 from voicelink.lyrics import Lrclib
 from voicelink.player import connect_channel
 from voicelink.exceptions import VoicelinkException
 from voicelink.language import LangHandler
-from voicelink.utils import dispatch_message
+from voicelink.utils import dispatch_message, is_expired_interaction_error
 from voicelink.placeholders import BotPlaceholder
 from voicelink.views.controller import InteractiveController, PlayPause
 from voicelink.views.playlist import PlaylistView
 
 
 class RuntimeErrorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_expired_controller_ack_does_not_run_the_action(self):
+        player = SimpleNamespace(channel=object(), node=SimpleNamespace(_available=True), is_user_join=Mock(return_value=True))
+        expired = discord.NotFound(SimpleNamespace(status=404, reason="Not Found"), {"code": 10062, "message": "Unknown Interaction"})
+        self.assertTrue(is_expired_interaction_error(commands.CommandInvokeError(expired)))
+        missing_message = discord.NotFound(SimpleNamespace(status=404, reason="Not Found"), {"code": 10008, "message": "Unknown Message"})
+        self.assertFalse(is_expired_interaction_error(missing_message))
+        with patch.object(Config(), "controller", {"buttons": []}):
+            view = InteractiveController(player)
+        response = SimpleNamespace(is_done=Mock(return_value=False), defer=AsyncMock(side_effect=expired))
+        self.assertFalse(await view.interaction_check(SimpleNamespace(response=response)))
+        player.is_user_join.assert_not_called()
+        view.stop()
+
     async def test_status_placeholder_resolves_live_node_pool(self):
         nodes = {"one": SimpleNamespace(_players={1: Mock(), 2: Mock()})}
         with patch("voicelink.pool.NodePool._nodes", nodes):

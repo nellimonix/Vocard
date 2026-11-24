@@ -26,6 +26,7 @@ import asyncio
 import discord
 import voicelink
 import function as func
+from aiohttp import ClientError
 
 from discord.ext import commands
 
@@ -131,23 +132,32 @@ class Listeners(commands.Cog):
             func.logger.error("Failed to remove session file: %s", Config.LAST_SESSION_FILE_DIR, exc_info=del_error)
 
     @commands.Cog.listener()
-    async def on_voicelink_track_end(self, player: voicelink.Player, track, _):
-        if not player.playback_stopped:
+    async def on_voicelink_track_end(self, player: voicelink.Player, track, reason):
+        if reason in ("finished", "loadFailed", "stopped") and not player.playback_stopped:
             await player.do_next()
 
     @commands.Cog.listener()
     async def on_voicelink_track_stuck(self, player: voicelink.Player, track, _):
-        await asyncio.sleep(10)
-        if not player.playback_stopped:
-            await player.do_next()
+        async with player._advance_lock:
+            if track is None or player.current is not track or player._closing or player.playback_stopped:
+                return
+            attempt = player._play_attempt
+            try:
+                await player.stop()
+            except (ClientError, TimeoutError, voicelink.NodeException, voicelink.NodeNotAvailable) as error:
+                if player._play_attempt == attempt and not player._closing:
+                    player._current = track
+                func.logger.warning("Could not skip a stalled track for guild %s: %s", player.guild.id, type(error).__name__)
+                return
+            player.note_track_failure()
+        await player.do_next()
 
     @commands.Cog.listener()
     async def on_voicelink_track_exception(self, player: voicelink.Player, track, error: dict):
-        try:
-            player._track_is_stuck = True
-            await player.context.send(f"{error['message']} The next song will begin in the next 5 seconds.", delete_after=10)
-        except:
-            pass
+        severity = error.get("severity")
+        if severity not in ("common", "suspicious", "fault"):
+            severity = "unknown"
+        func.logger.warning("Lavalink reported a track exception for guild %s (%s)", player.guild.id, severity)
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
@@ -158,36 +168,25 @@ class Listeners(commands.Cog):
             return
 
         player: voicelink.Player = member.guild.voice_client
-        if not player:
+        if not player or player._closing or not (channel := player.channel):
             return
 
-        is_joined = True
-
-        if not before.channel and after.channel:
-            if after.channel.id != player.channel.id:
-                return
-
-        elif before.channel and not after.channel:
-            is_joined = False
-
-        elif before.channel and after.channel:
-            if after.channel.id != player.channel.id:
-                is_joined = False
+        if before.channel != channel and after.channel != channel:
+            return
+        is_joined = after.channel == channel
+        listeners = [member for member in channel.members if not member.bot and member.voice and not member.voice.self_deaf]
 
         if is_joined and player.settings.get("24/7", False):
-            if player.is_paused and len([m for m in player.channel.members if not m.bot and m.voice and not m.voice.self_deaf]) == 1:
+            if player.is_paused and len(listeners) == 1:
                 await player.set_pause(False, member)
+                if player._closing or player.channel != channel or member.guild.voice_client is not player:
+                    return
 
-        if not is_joined:
-            if not player.is_paused and len([m for m in player.channel.members if not m.bot and m.voice and not m.voice.self_deaf]) == 0:
-                player._schedule_inactive_cleanup_timer()
+        if not is_joined and not player.is_paused and not listeners:
+            player._schedule_inactive_cleanup_timer()
 
-        # if dj is not in the channel, find a new DJ
-        if player.dj not in player.channel.members:
-            for m in player.channel.members:
-                if not m.bot and m.voice and not m.voice.self_deaf:
-                    player.dj = m
-                    break
+        if player.dj not in channel.members and listeners:
+            player.dj = listeners[0]
 
         if player.is_ipc_connected:
             await player._ipc_client.send({
@@ -197,7 +196,7 @@ class Listeners(commands.Cog):
                     "avatarUrl": member.display_avatar.url,
                     "name": member.name,
                 },
-                "channelName": member.voice.channel.name if is_joined else "",
+                "channelName": channel.name if is_joined else "",
                 "guildId": str(member.guild.id),
                 "isJoined": is_joined
             })

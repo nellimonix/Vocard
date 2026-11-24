@@ -38,7 +38,7 @@ from function import (
 
 from voicelink import MongoDBHandler, LangHandler, Config
 from voicelink.views import SearchView, QueueView, LinkView, LyricsView, HelpView
-from voicelink.utils import format_ms, format_to_ms, truncate_string, dispatch_message, send_localized_message
+from voicelink.utils import defer_interaction, format_ms, format_to_ms, truncate_string, dispatch_message, send_localized_message
 
 async def enqueue_search(ctx, player, query, requester, *, start="0", end="0", limit=None, offset=0, ephemeral=False):
     found = await player.get_tracks(query, requester=requester)
@@ -159,14 +159,12 @@ class Basic(commands.Cog):
         if not player.is_user_join(ctx.author):
             return await send_localized_message(ctx, "voice.connection.notInChannel", ctx.author.mention, player.channel.mention, ephemeral=True)
 
-        if ctx.interaction and not ctx.interaction.response.is_done():
-            await ctx.interaction.response.defer()
-
         await enqueue_search(ctx, player, query, ctx.author, start=start, end=end)
 
     @commands.dynamic_cooldown(cooldown_check, commands.BucketType.guild)
     async def _play(self, interaction: discord.Interaction, message: discord.Message):
-        await interaction.response.defer()
+        if not await defer_interaction(interaction):
+            return
         query = ""
 
         if message.content:

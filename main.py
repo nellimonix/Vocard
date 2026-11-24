@@ -32,7 +32,7 @@ import function as func
 from discord.ext import commands
 from logging.handlers import TimedRotatingFileHandler
 from voicelink import Config, LangHandler, MongoDBHandler, IPCClient, VoicelinkException
-from voicelink.utils import dispatch_message
+from voicelink.utils import dispatch_message, is_expired_interaction_error
 
 class Translator(discord.app_commands.Translator):
     MISSING_TRANSLATOR: dict[str, list[str]] = {}
@@ -166,6 +166,9 @@ class Vocard(commands.AutoShardedBot):
         bot_config.client_id = self.user.id
 
     async def on_command_error(self, ctx: commands.Context, exception, /) -> None:
+        if ctx.interaction and is_expired_interaction_error(exception):
+            func.logger.debug("Discord interaction expired before the command response")
+            return
         error = getattr(exception, 'original', exception)
         if ctx.interaction:
             error = getattr(error, 'original', error)
@@ -189,8 +192,8 @@ class Vocard(commands.AutoShardedBot):
             return await ctx.reply(embed=embed)
 
         elif not issubclass(error.__class__, VoicelinkException):
-            error = await Lang_handler.get_lang(ctx.guild.id, "common.errors.unknown") + bot_config.invite_link
             func.logger.error(f"An unexpected error occurred in the {ctx.command.name} command on the {ctx.guild.name}({ctx.guild.id}).", exc_info=exception)
+            error = await LangHandler.get_lang(ctx.guild.id, "common.errors.unknown") + bot_config.invite_link
 
         try:
             return await ctx.reply(error, ephemeral=True)
@@ -200,6 +203,9 @@ class Vocard(commands.AutoShardedBot):
 class CommandCheck(discord.app_commands.CommandTree):
     async def on_error(self, interaction: discord.Interaction, error: discord.app_commands.AppCommandError, /) -> None:
         if isinstance(error, discord.app_commands.CommandNotFound):
+            return
+        if is_expired_interaction_error(error):
+            func.logger.debug("Discord interaction expired before the application command response")
             return
         await super().on_error(interaction, error)
 

@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import discord
 from discord.ext import commands
 
-from voicelink import Config, LangHandler, MongoDBHandler, Player, SearchType, TrackLoadError
+from voicelink import Config, LangHandler, MongoDBHandler, Node, Player, SearchType, TrackLoadError
 from voicelink.enums import RequestMethod
 from voicelink.cache import BoundedTTLCache
 from voicelink.player import connect_channel
@@ -69,6 +69,28 @@ class AutocompleteTests(unittest.IsolatedAsyncioTestCase):
 
 
 class VoiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_voice_listener_ignores_a_player_whose_channel_has_been_cleared(self):
+        from cogs.listeners import Listeners
+
+        player = SimpleNamespace(channel=None, _closing=False, _schedule_inactive_cleanup_timer=Mock())
+        member = SimpleNamespace(bot=False, guild=SimpleNamespace(voice_client=player))
+        await Listeners.on_voice_state_update(None, member, SimpleNamespace(channel=object()), SimpleNamespace(channel=None))
+        player._schedule_inactive_cleanup_timer.assert_not_called()
+
+    async def test_lavalink_retries_transient_read_and_stops_on_rate_limit(self):
+        temporary = {"loadType": "error", "data": {"message": "Could not load track", "severity": "fault",
+                                                    "causeStackTrace": "java.net.SocketTimeoutException"}}
+        node = SimpleNamespace(send=AsyncMock(side_effect=[temporary, {"loadType": "empty"}]))
+        with patch("voicelink.pool.asyncio.sleep", new=AsyncMock()):
+            result = await Node.get_tracks(node, "query", requester=None, search_type=SearchType.YANDEX_MUSIC)
+        self.assertIsNone(result)
+        self.assertEqual(node.send.await_count, 2)
+        limited = temporary | {"data": temporary["data"] | {"message": "HTTP 429"}}
+        node.send = AsyncMock(return_value=limited)
+        with self.assertRaises(TrackLoadError):
+            await Node.get_tracks(node, "query", requester=None, search_type=SearchType.YANDEX_MUSIC)
+        node.send.assert_awaited_once()
+
     def voice_player(self, **kwargs):
         return SimpleNamespace(_voice_update_lock=asyncio.Lock(), _voice_ready=asyncio.Event(),
                                _voice_dispatched=None, node=SimpleNamespace(_session_id="lavalink-session"), **kwargs)
