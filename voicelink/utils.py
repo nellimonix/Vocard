@@ -33,6 +33,7 @@ from discord.ext import commands
 
 from .mongodb import MongoDBHandler
 from .language import LangHandler
+from .exceptions import TrackLoadError
 
 # __all__ = [
 #     "ExponentialBackoff",
@@ -137,6 +138,7 @@ class NodeInfo:
         self.build_time: int = data.get("buildTime")
         self.jvm: str = data.get("jvm")
         self.lavaplayer: str = data.get("lavaplayer")
+        self.sources = {source.casefold() for source in data.get("sourceManagers", [])}
         self.plugins: Optional[Dict[str, Plugin]] = [Plugin(plugin_data) for plugin_data in data.get("plugins")]
 
 class Plugin:
@@ -425,3 +427,11 @@ async def send_localized_message(
         formatted_text = "Translation not found."
 
     return await dispatch_message(ctx, content=formatted_text, **kwargs)
+
+
+async def track_load_error_text(guild_id: int, error: TrackLoadError) -> str:
+    if error.event_id:
+        template = await LangHandler.get_lang(guild_id, "player.errors.trackLoadFailed")
+        if template and template != "Not found!":
+            return template.format(error.event_id)
+    return str(error)

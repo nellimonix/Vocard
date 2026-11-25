@@ -34,6 +34,12 @@
             "path": "./logs",
             "enable": true
         },
+        "discord": {
+            "guild_id": 0,
+            "channel_id": 0,
+            "plus_mention_user_id": 0,
+            "yandex_music_tokens": {}
+        },
         "level": {
             "discord": "INFO",
             "vocard": "INFO",

@@ -24,14 +24,15 @@ SOFTWARE.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 import aiohttp
-import logging
+from .diagnostics import lookup_report, python_trace, record, source_failure
 
 from discord import Client, Member
 from discord.ext.commands import Bot
-from typing import Dict, Optional, Union, List, Any, TYPE_CHECKING
+from typing import Dict, Optional, Union, List, TYPE_CHECKING
 from urllib.parse import quote
 
 from . import (
@@ -43,6 +44,7 @@ from .exceptions import (
     NodeConnectionFailure,
     NodeCreationError,
     NodeException,
+    NodeHTTPError,
     NodeNotAvailable,
     NoNodesAvailable,
     TrackLoadError
@@ -74,6 +76,27 @@ RECOMMENDATION_PREFIXES = {
 }
 
 NODE_VERSION = "v4"
+_logger = logging.getLogger("vocard.lavalink")
+_YANDEX_MUSIC_URL = re.compile(r"https?://(?:www\.)?music\.yandex\.(?:ru|com|kz|by)(?:[/:?#]|$)", re.IGNORECASE)
+
+
+def track_identifier(query):
+    query = query.strip()
+    prefix, separator, term = query.partition(":")
+    prefix = prefix.lower()
+    if VK_MUSIC_URL.fullmatch(query):
+        return query, "vkmusic"
+    if URL_REGEX.match(query):
+        return query, "yandexmusic" if _YANDEX_MUSIC_URL.match(query) else None
+    if separator:
+        if prefix == "vkrec":
+            return None, None
+        if prefix in RECOMMENDATION_PREFIXES:
+            return query, "yandexmusic" if prefix == "ymrec" else None
+        if prefix in SEARCH_PREFIXES:
+            query = term.strip()
+    return (f"{SearchType.YANDEX_MUSIC}:{query}", "yandexmusic") if query else (None, None)
+
 
 class Node:
     """The base class for a node.
@@ -262,6 +285,24 @@ class Node:
             await player._update_state(data)
 
     async def send(self, method: RequestMethod, query: str, data: Union[dict, str] = {}) -> dict:
+        operation = query.split("?", 1)[0].split("/", 1)[0]
+        if operation not in {"sessions", "loadtracks", "info", "stats", "decodetrack", "decodetracks"}:
+            operation = "other"
+        try:
+            return await self._send(method, query, data)
+        except Exception as error:
+            if operation != "loadtracks":
+                action = next((key for key in ("voice", "track", "paused", "position", "volume", "filters")
+                               if isinstance(data, dict) and key in data), None)
+                record(_logger, "lavalink_request_failed", node=self._identifier, method=method.name,
+                       operation=operation, action=action, status=getattr(error, "status", None),
+                       traceback=python_trace(error))
+            raise
+
+    def supports(self, source):
+        return bool(self._info and source.casefold() in self._info.sources)
+
+    async def _send(self, method: RequestMethod, query: str, data: Union[dict, str]) -> dict:
         if not self._available:
             raise NodeNotAvailable(f"The node '{self._identifier}' is unavailable.")
 
@@ -275,7 +316,7 @@ class Node:
             if method == RequestMethod.DELETE and resp.status in (204, 404):
                 return None
             if resp.status >= 300:
-                raise NodeException(f"Getting errors from Lavalink REST api")
+                raise NodeHTTPError(resp.status)
 
             if method == RequestMethod.DELETE:
                 return await resp.json(content_type=None)
@@ -380,56 +421,57 @@ class Node:
         You can also pass in a discord.py Context object to get a
         Context object on any track you search.
         """
-        query = query.strip()
-        prefix, separator, term = query.partition(":")
-        if prefix.lower() == "vkrec" and separator:
+        identifier, source = track_identifier(query)
+        if not identifier:
             return None
-        if not (URL_REGEX.match(query) or VK_MUSIC_URL.fullmatch(query) or (separator and prefix.lower() in RECOMMENDATION_PREFIXES)):
-            if separator and prefix.lower() in SEARCH_PREFIXES:
-                query = term.strip()
-            if not query:
-                return None
-            query = f"{SearchType.YANDEX_MUSIC}:{query}"
 
-        route = f"loadtracks?identifier={quote(query)}"
-        for attempt in range(2):
-            if attempt:
-                await asyncio.sleep(0.25)
-            try:
-                async with asyncio.timeout(8):
-                    response: dict[str, Any] = await self.send(RequestMethod.GET, route)
-            except (aiohttp.ClientConnectionError, TimeoutError) as error:
+        route = f"loadtracks?identifier={quote(identifier)}"
+        try:
+            for attempt in range(2):
                 if attempt:
-                    raise TrackLoadError("There was an error while trying to load this track.") from error
-                continue
-            if attempt or response.get("loadType") != "error":
-                break
-            failure = response.get("data") or {}
-            cause = " ".join(str(failure.get(key) or "") for key in ("message", "cause", "causeStackTrace"))
-            if re.search(r"\b429\b", cause):
-                break
-            if not any(kind in cause for kind in ("ConnectTimeoutException", "SocketTimeoutException", "UnknownHostException")):
-                break
-        data = response.get("data")
-        load_type = response.get("loadType")
+                    await asyncio.sleep(0.25)
+                try:
+                    async with asyncio.timeout(8):
+                        response = await self.send(RequestMethod.GET, route)
+                except (aiohttp.ClientConnectionError, TimeoutError):
+                    if attempt:
+                        raise
+                    continue
+                load_type = response.get("loadType") if isinstance(response, dict) else None
+                data = response.get("data") if isinstance(response, dict) else None
+                if load_type != "error":
+                    break
+                if not isinstance(data, dict):
+                    raise ValueError("Invalid Lavalink error payload")
+                failure = source_failure(data)
+                if attempt or failure["category"] != "source_timeout":
+                    event_id = record(_logger, "lavalink_lookup_failed", node=self._identifier, source=source, **failure)
+                    raise TrackLoadError(failure=failure["category"], retryable=failure["severity"] == "fault",
+                                         event_id=event_id)
 
-        if not load_type:
-            raise TrackLoadError("There was an error while trying to load this track.")
-
-        elif load_type == "empty":
-            return None
-
-        elif load_type == "error":
-            raise TrackLoadError(f"{data['message']} [{data['severity']}]")
-
-        elif load_type in ("playlist", "recommendations"):
-            return Playlist(playlist_info=data["info"], tracks=data["tracks"], requester=requester)
-
-        elif load_type == "search":
-            return [Track.from_lavalink(track, requester) for track in data]
-
-        elif load_type == "track":
-            return [Track.from_lavalink(data, requester)]
+            if load_type == "empty":
+                return None
+            if load_type in ("playlist", "recommendations"):
+                return Playlist(playlist_info=data["info"], tracks=data["tracks"], requester=requester)
+            if load_type == "search" and isinstance(data, list):
+                return [Track.from_lavalink(track, requester) for track in data]
+            if load_type == "track":
+                return [Track.from_lavalink(data, requester)]
+            raise ValueError("Invalid Lavalink load type or payload")
+        except (aiohttp.ClientError, NodeNotAvailable, NodeHTTPError, TimeoutError,
+                AttributeError, KeyError, TypeError, ValueError) as error:
+            status = getattr(error, "status", None)
+            if isinstance(error, TimeoutError):
+                category = "node_timeout"
+            elif isinstance(error, NodeHTTPError):
+                category = "node_http"
+            elif isinstance(error, (aiohttp.ClientConnectionError, NodeNotAvailable)):
+                category = "node_connection"
+            else:
+                category = "invalid_response"
+            event_id = record(_logger, "lavalink_lookup_failed", node=self._identifier, source=source, category=category,
+                              status=status, traceback=python_trace(error))
+            raise TrackLoadError(failure=category, retryable=True, event_id=event_id) from error
 
     async def update_refresh_yt_access_token(self, token: YTToken) -> dict:
         if not self._available:
@@ -493,23 +535,57 @@ class NodePool:
             return min(tested_nodes, key=tested_nodes.get)
 
     @classmethod
-    def get_node(cls, *, identifier: str = None) -> Node:
+    def get_node(cls, *, identifier: str = None, source: str = None, exclude: Node = None) -> Node:
         """Fetches a node from the node pool using it's identifier.
            If no identifier is provided, it will choose a node at random.
         """
 
-        available_nodes = { node
-            for _, node in cls._nodes.items() if node.is_connected
-        }
-
-        if identifier:
-            available_nodes = { node for node in available_nodes if node._identifier == identifier }
+        nodes = [node for node in cls._nodes.values() if not identifier or node._identifier == identifier]
+        available_nodes = [node for node in nodes if node.is_connected]
+        if exclude is not None:
+            available_nodes = [node for node in available_nodes if node is not exclude and node._available
+                               and (not source or node.supports(source))]
 
         if not available_nodes:
             raise NoNodesAvailable("There are no nodes available.")
 
-        nodes = {node: len(node.players.keys()) for node in available_nodes}
-        return min(nodes, key=nodes.get)
+        return min(available_nodes, key=lambda node: (len(node.players), node._identifier))
+
+    @classmethod
+    async def load_tracks(cls, query, *, requester, node=None, search_type=None):
+        with lookup_report():
+            if node is None:
+                try:
+                    node = cls.get_node()
+                except NoNodesAvailable as error:
+                    _, source = track_identifier(query)
+                    event_id = record(_logger, "lavalink_lookup_failed", source=source, category="no_nodes")
+                    raise TrackLoadError(failure="no_nodes", event_id=event_id) from error
+            try:
+                return await node.get_tracks(query, requester=requester, search_type=search_type)
+            except TrackLoadError as error:
+                if not error.retryable:
+                    raise
+                _, source = track_identifier(query)
+                try:
+                    alternative = cls.get_node(source=source, exclude=node)
+                except NoNodesAvailable:
+                    alternative = None
+                if alternative is None:
+                    record(_logger, "lavalink_lookup_failover", node=node._identifier, source=source,
+                           outcome="unavailable")
+                    raise
+
+            try:
+                result = await alternative.get_tracks(query, requester=requester, search_type=search_type)
+            except TrackLoadError:
+                record(_logger, "lavalink_lookup_failover", node=node._identifier, alternative=alternative._identifier,
+                       source=source, outcome="failed")
+                raise
+            record(_logger, "lavalink_lookup_failover", level="info", node=node._identifier,
+                   alternative=alternative._identifier, source=source,
+                   outcome="recovered" if result else "empty")
+            return result
 
     @classmethod
     async def create_node(

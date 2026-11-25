@@ -29,6 +29,12 @@ class NodeException(Exception):
     """Base exception for nodes."""
 
 
+class NodeHTTPError(NodeException):
+    def __init__(self, status: int):
+        super().__init__("Getting errors from Lavalink REST api")
+        self.status = status
+
+
 class NodeCreationError(NodeException):
     """There was a problem while creating the node."""
 
@@ -59,7 +65,17 @@ class TrackInvalidPosition(VoicelinkException):
 
 class TrackLoadError(VoicelinkException):
     """There was an error while loading a track."""
-    pass
+
+    def __init__(self, message="There was an error while trying to load this track.", *,
+                 failure=None, retryable=False, event_id=None):
+        super().__init__(message)
+        self.failure = failure
+        self.retryable = retryable
+        self.event_id = event_id
+
+    def __str__(self):
+        message = super().__str__()
+        return f"{message} (#{self.event_id})" if self.event_id else message
 
 
 class FilterInvalidArgument(VoicelinkException):

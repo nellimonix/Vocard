@@ -38,7 +38,10 @@ from function import (
 
 from voicelink import MongoDBHandler, LangHandler, Config
 from voicelink.views import SearchView, QueueView, LinkView, LyricsView, HelpView
-from voicelink.utils import defer_interaction, format_ms, format_to_ms, truncate_string, dispatch_message, send_localized_message
+from voicelink.utils import (
+    defer_interaction, dispatch_message, format_ms, format_to_ms, send_localized_message,
+    track_load_error_text, truncate_string,
+)
 
 async def enqueue_search(ctx, player, query, requester, *, start="0", end="0", limit=None, offset=0, ephemeral=False):
     found = await player.get_tracks(query, requester=requester)
@@ -114,12 +117,10 @@ class Basic(commands.Cog):
             return []
 
         if current:
-            node = voicelink.NodePool.get_node()
-            if not node:
-                return []
-
             try:
-                tracks = await asyncio.wait_for(node.get_tracks(current, requester=interaction.user), timeout=2)
+                tracks = await asyncio.wait_for(
+                    voicelink.NodePool.load_tracks(current, requester=interaction.user), timeout=2
+                )
             except (asyncio.TimeoutError, voicelink.VoicelinkException):
                 return []
             if not tracks:
@@ -183,7 +184,10 @@ class Basic(commands.Cog):
         if not player.is_user_join(interaction.user):
             return await send_localized_message(interaction, "voice.connection.notInChannel", interaction.user.mention, player.channel.mention, ephemeral=True)
 
-        tracks = await player.get_tracks(query, requester=interaction.user)
+        try:
+            tracks = await player.get_tracks(query, requester=interaction.user)
+        except voicelink.TrackLoadError as error:
+            return await dispatch_message(interaction, await track_load_error_text(interaction.guild.id, error), ephemeral=True)
         if not tracks:
             return await send_localized_message(interaction, "player.errors.noTrackFound")
 

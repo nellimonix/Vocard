@@ -98,7 +98,7 @@ class VoiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_lavalink_retries_transient_read_and_stops_on_rate_limit(self):
         temporary = {"loadType": "error", "data": {"message": "Could not load track", "severity": "fault",
                                                     "causeStackTrace": "java.net.SocketTimeoutException"}}
-        node = SimpleNamespace(send=AsyncMock(side_effect=[temporary, {"loadType": "empty"}]))
+        node = SimpleNamespace(_identifier="MAIN", send=AsyncMock(side_effect=[temporary, {"loadType": "empty"}]))
         with patch("voicelink.pool.asyncio.sleep", new=AsyncMock()):
             result = await Node.get_tracks(node, "query", requester=None, search_type=SearchType.YANDEX_MUSIC)
         self.assertIsNone(result)

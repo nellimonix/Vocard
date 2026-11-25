@@ -240,7 +240,7 @@ async def getTracks(bot: commands.Bot, data: Dict) -> Dict:
 
     if query:
         payload = {"op": "getTracks", "userId": data.get("userId"), "callback": data.get("callback")}
-        tracks = await NodePool.get_node().get_tracks(query=query, requester=None)
+        tracks = await NodePool.load_tracks(query=query, requester=None)
         if not tracks:
             return payload
 
@@ -351,7 +351,7 @@ async def updateFilter(player: Player, member: Member, data: Dict) -> None:
 
 async def _loadPlaylist(playlist: Dict) -> Optional[List[Track]]:
     if playlist.get("type") == "link":
-        tracks: List[Track]= await NodePool.get_node().get_tracks(playlist.get("uri"), requester=None)
+        tracks: List[Track]= await NodePool.load_tracks(playlist.get("uri"), requester=None)
         if tracks:
             return [track.track_id for track in (tracks.tracks if isinstance(tracks, Playlist) else tracks)]
     else:
@@ -429,7 +429,7 @@ async def updatePlaylist(bot: commands.Bot, data: Dict) -> Dict:
                 }
 
         if playlist_url:
-            tracks = await NodePool.get_node().get_tracks(playlist_url, requester=None)
+            tracks = await NodePool.load_tracks(playlist_url, requester=None)
             if not isinstance(tracks, Playlist):
                 return {
                     "op": "updatePlaylist",

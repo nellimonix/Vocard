@@ -3,8 +3,11 @@ from urllib.parse import urlsplit
 import discord
 
 from ..config import Config
-from ..exceptions import VoicelinkException
-from ..utils import defer_interaction, dispatch_message, format_ms, is_expired_interaction_error, send_localized_message
+from ..exceptions import TrackLoadError, VoicelinkException
+from ..utils import (
+    defer_interaction, dispatch_message, format_ms, is_expired_interaction_error,
+    send_localized_message, track_load_error_text,
+)
 from .controller import ADD_TRACK_ID, BUTTON_TYPE, Back, ControllerInteractions, Stop, StopPlayback
 
 
@@ -152,6 +155,8 @@ class AddTrackModal(discord.ui.Modal):
                                  offset=int(offset) if offset else 0, ephemeral=True)
             if was_playing and player.is_playing:
                 await player.invoke_controller()
+        except TrackLoadError as error:
+            await dispatch_message(interaction, await track_load_error_text(interaction.guild.id, error), ephemeral=True)
         except VoicelinkException as error:
             await dispatch_message(interaction, str(error), ephemeral=True)
 

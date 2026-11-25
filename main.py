@@ -31,8 +31,10 @@ import function as func
 
 from discord.ext import commands
 from logging.handlers import TimedRotatingFileHandler
-from voicelink import Config, LangHandler, MongoDBHandler, IPCClient, VoicelinkException
-from voicelink.utils import dispatch_message, is_expired_interaction_error
+from voicelink import Config, LangHandler, MongoDBHandler, IPCClient, TrackLoadError, VoicelinkException
+from voicelink.utils import dispatch_message, is_expired_interaction_error, track_load_error_text
+from voicelink.diagnostic_alerts import DiscordDiagnostics
+from voicelink.diagnostics import python_trace, record
 
 class Translator(discord.app_commands.Translator):
     MISSING_TRANSLATOR: dict[str, list[str]] = {}
@@ -74,6 +76,7 @@ class Vocard(commands.AutoShardedBot):
         self.ipc_client: IPCClient
         self.compact_controller = True
         self.compact_app_emojis: dict[str, int] = {}
+        self._discord_diagnostics = None
 
     async def on_message(self, message: discord.Message, /) -> None:
         # Ignore messages from bots or DMs
@@ -106,6 +109,8 @@ class Vocard(commands.AutoShardedBot):
                             for attachment in message.attachments:
                                 await cmd(ctx, query=attachment.url)
 
+                except TrackLoadError as error:
+                    await dispatch_message(ctx, await track_load_error_text(message.guild.id, error), ephemeral=True)
                 except Exception as e:
                     await dispatch_message(ctx, str(e), ephemeral=True)
 
@@ -115,6 +120,14 @@ class Vocard(commands.AutoShardedBot):
         await self.process_commands(message)
 
     async def setup_hook(self) -> None:
+        destination = bot_config.logging.get("discord") or {}
+        if destination.get("guild_id") and destination.get("channel_id"):
+            self._discord_diagnostics = DiscordDiagnostics(
+                self, int(destination["guild_id"]), int(destination["channel_id"]),
+                yandex_music_tokens=destination.get("yandex_music_tokens"),
+                plus_mention_user_id=int(destination.get("plus_mention_user_id") or 0),
+            )
+            self._discord_diagnostics.start()
         if self.application_id is not None:
             try:
                 self.compact_app_emojis = {emoji.name: emoji.id for emoji in await self.fetch_application_emojis()}
@@ -165,6 +178,11 @@ class Vocard(commands.AutoShardedBot):
 
         bot_config.client_id = self.user.id
 
+    async def close(self):
+        if self._discord_diagnostics is not None:
+            await self._discord_diagnostics.close()
+        await super().close()
+
     async def on_command_error(self, ctx: commands.Context, exception, /) -> None:
         if ctx.interaction and is_expired_interaction_error(exception):
             func.logger.debug("Discord interaction expired before the command response")
@@ -191,8 +209,12 @@ class Vocard(commands.AutoShardedBot):
             embed.set_footer(icon_url=ctx.me.display_avatar.url, text=f"More Help: {bot_config.invite_link}")
             return await ctx.reply(embed=embed)
 
+        elif isinstance(error, TrackLoadError):
+            error = await track_load_error_text(ctx.guild.id, error)
+
         elif not issubclass(error.__class__, VoicelinkException):
-            func.logger.error(f"An unexpected error occurred in the {ctx.command.name} command on the {ctx.guild.name}({ctx.guild.id}).", exc_info=exception)
+            record(func.logger, "discord_command_failed", level="error", command=ctx.command.qualified_name,
+                   guild=ctx.guild.id, traceback=python_trace(exception))
             error = await LangHandler.get_lang(ctx.guild.id, "common.errors.unknown") + bot_config.invite_link
 
         try:
@@ -207,7 +229,11 @@ class CommandCheck(discord.app_commands.CommandTree):
         if is_expired_interaction_error(error):
             func.logger.debug("Discord interaction expired before the application command response")
             return
-        await super().on_error(interaction, error)
+        command = interaction.command
+        if command is None or not command._has_any_error_handlers():
+            record(func.logger, "discord_application_command_failed", level="error",
+                   command=command.qualified_name if command else None, guild=interaction.guild_id,
+                   traceback=python_trace(error))
 
     async def interaction_check(self, interaction: discord.Interaction, /) -> bool:
         if interaction.type == discord.InteractionType.application_command:

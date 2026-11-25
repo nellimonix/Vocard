@@ -16,7 +16,8 @@
             "noPlaySource": "Can't find any playable sources!",
             "noPlayer": "No player has been found on this server.",
             "noTrackPlaying": "There are no songs playing right now",
-            "noTrackFound": "No songs were found with that query! Please provide a valid url."
+            "noTrackFound": "No songs were found with that query! Please provide a valid url.",
+            "trackLoadFailed": "Couldn’t load the track. Please try again later. (#{0})"
         },
         "dropdown": {
             "trackSelect": "Select a song to skip to ...",

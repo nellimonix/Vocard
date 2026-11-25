@@ -31,6 +31,7 @@ from aiohttp import ClientError
 from discord.ext import commands
 
 from voicelink import MongoDBHandler, Config
+from voicelink.diagnostics import record, source_failure
 from voicelink.utils import TempCtx
 
 class Listeners(commands.Cog):
@@ -154,10 +155,8 @@ class Listeners(commands.Cog):
 
     @commands.Cog.listener()
     async def on_voicelink_track_exception(self, player: voicelink.Player, track, error: dict):
-        severity = error.get("severity")
-        if severity not in ("common", "suspicious", "fault"):
-            severity = "unknown"
-        func.logger.warning("Lavalink reported a track exception for guild %s (%s)", player.guild.id, severity)
+        record(func.logger, "lavalink_playback_failed", guild=player.guild.id, node=player.node._identifier,
+               source=getattr(track, "source", None), **source_failure(error))
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):

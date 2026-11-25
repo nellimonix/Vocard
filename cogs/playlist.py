@@ -163,7 +163,7 @@ async def check_playlist(
 async def search_playlist(url: str, requester: discord.Member, time_needed: bool = True) -> dict:
     """Search for playlist tracks from a URL."""
     try:
-        tracks = await voicelink.NodePool.get_node().get_tracks(url, requester=requester)
+        tracks = await voicelink.NodePool.load_tracks(url, requester=requester)
         result = {"name": tracks.name, "tracks": tracks.tracks}
 
         if time_needed:
@@ -377,7 +377,7 @@ class Playlists(commands.Cog, name="playlist"):
             if user[data]['name'].lower() == name.lower():
                 return await send_localized_message(ctx, 'playlist.errors.exists', name, ephemeral=True)
         if link:
-            tracks = await voicelink.NodePool.get_node().get_tracks(link, requester=ctx.author)
+            tracks = await voicelink.NodePool.load_tracks(link, requester=ctx.author)
             if not isinstance(tracks, voicelink.Playlist):
                 return await send_localized_message(ctx, "playlist.errors.invalidUrl", ephemeral=True)
 
@@ -578,7 +578,7 @@ class Playlists(commands.Cog, name="playlist"):
         if len(result['playlist']['tracks']) >= max_t:
             return await send_localized_message(ctx, 'playlist.errors.trackLimitReached', max_t, ephemeral=True)
 
-        results = await voicelink.NodePool.get_node().get_tracks(query, requester=ctx.author)
+        results = await voicelink.NodePool.load_tracks(query, requester=ctx.author)
         if not results:
             return await send_localized_message(ctx, 'player.errors.noTrackFound')
 

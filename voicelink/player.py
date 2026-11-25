@@ -51,6 +51,7 @@ from discord.ext import commands
 from . import events
 from .config import Config
 from .pool import Node, NodePool
+from .diagnostics import python_trace, record
 from .objects import Track, Playlist
 from .filters import Filter, Filters
 from .enums import SearchType, LoopType, RequestMethod
@@ -373,8 +374,13 @@ class Player(VoiceProtocol):
             if self._closing and method == RequestMethod.PATCH:
                 return {}
             uri = f"sessions/{self._node._session_id}/players/{self._guild.id}" + (f"?{query}" if query else "")
-            async with asyncio.timeout(10):
-                return await self._node.send(method, query=uri, data=data)
+            try:
+                async with asyncio.timeout(10):
+                    return await self._node.send(method, query=uri, data=data)
+            except TimeoutError as error:
+                record(self._logger, "lavalink_player_request_timeout", guild=self.guild.id,
+                       node=getattr(self._node, "_identifier", None), method=method.name, traceback=python_trace(error))
+                raise
 
     async def _update_state(self, data: dict) -> None:
         """Updates the player's state based on the provided data."""
@@ -745,7 +751,7 @@ class Player(VoiceProtocol):
         if not search_type:
             search_type = Config().search_platform
 
-        return await self._node.get_tracks(query, requester=requester, search_type=search_type)
+        return await NodePool.load_tracks(query, requester=requester, node=self._node, search_type=search_type)
 
     async def connect(self, *, timeout: float, reconnect: bool, self_deaf: bool = True, self_mute: bool = False):
         """Connects the player to a voice channel."""
